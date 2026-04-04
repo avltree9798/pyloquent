@@ -1172,7 +1172,7 @@ class QueryBuilder(Generic[T]):
                 operator=operator,
                 value=count,
                 boolean=boolean,
-                type="raw",
+                type="basic",
             )
         )
 

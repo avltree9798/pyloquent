@@ -878,6 +878,15 @@ class Model(BaseModel, metaclass=ModelMeta):
         return cls.query.get()
 
     @classmethod
+    def first(cls: Type[T]) -> Any:
+        """Get the first record.
+
+        Returns:
+            Coroutine that resolves to model or None
+        """
+        return cls.query.first()
+
+    @classmethod
     def find(cls: Type[T], id: Any) -> Any:
         """Find a record by primary key.
 

@@ -29,6 +29,7 @@ class SQLiteConnection(Connection):
         self._timeout = config.get("timeout", 5.0)
         self._isolation_level = config.get("isolation_level", None)
         self._connection = None
+        self._in_transaction = False
 
     async def connect(self) -> None:
         """Establish SQLite connection.
@@ -74,7 +75,8 @@ class SQLiteConnection(Connection):
 
         try:
             cursor = await self._connection.execute(sql, bindings or [])
-            await self._connection.commit()
+            if not self._in_transaction:
+                await self._connection.commit()
 
             # Return last row id for INSERT, row count for UPDATE/DELETE
             if sql.strip().upper().startswith("INSERT"):
@@ -143,15 +145,18 @@ class SQLiteConnection(Connection):
         if not self._connection:
             raise QueryException("Not connected to database")
         await self._connection.execute("BEGIN")
+        self._in_transaction = True
 
     async def commit(self) -> None:
         """Commit current transaction."""
         if not self._connection:
             raise QueryException("Not connected to database")
         await self._connection.commit()
+        self._in_transaction = False
 
     async def rollback(self) -> None:
         """Rollback current transaction."""
         if not self._connection:
             raise QueryException("Not connected to database")
         await self._connection.rollback()
+        self._in_transaction = False

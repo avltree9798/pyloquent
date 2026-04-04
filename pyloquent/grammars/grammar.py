@@ -238,9 +238,13 @@ class Grammar(ABC):
         if not query._selects:
             return f"{select} *"
 
+        from pyloquent.query.expression import RawExpression
+
         columns = []
         for column in query._selects:
-            if isinstance(column, dict):
+            if isinstance(column, RawExpression):
+                columns.append(column.sql)
+            elif isinstance(column, dict):
                 # Handle aliased columns: {'column': 'alias'}
                 for col, alias in column.items():
                     columns.append(f"{self._wrap_column(col)} AS {self._wrap_column(alias)}")
@@ -331,6 +335,13 @@ class Grammar(ABC):
                     f"{self._parameter(where.value[0])} AND {self._parameter(where.value[1])}"
                 )
                 sql_parts.append(f"{prefix}{column} BETWEEN {placeholders}")
+                bindings.extend(where.value)
+            elif where.type == "not_between":
+                column = self._wrap_column(where.column)
+                placeholders = (
+                    f"{self._parameter(where.value[0])} AND {self._parameter(where.value[1])}"
+                )
+                sql_parts.append(f"{prefix}{column} NOT BETWEEN {placeholders}")
                 bindings.extend(where.value)
             elif where.type == "null":
                 column = self._wrap_column(where.column)

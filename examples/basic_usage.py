@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from pyloquent import ConnectionManager, Model
+from pyloquent.database.manager import set_manager
 
 
 # Configure connection manager
@@ -50,6 +51,7 @@ async def setup_database():
         default=True,
     )
 
+    set_manager(manager)
     await manager.connect()
 
     # Create tables

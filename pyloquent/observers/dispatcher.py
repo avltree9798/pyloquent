@@ -1,5 +1,6 @@
 """Event dispatcher for model events."""
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Type
 
 if TYPE_CHECKING:
@@ -142,6 +143,3 @@ class EventDispatcher:
         """
         return len(cls._model_listeners.get(model_class, {}).get(event, [])) > 0
 
-
-# Import asyncio for checking coroutines
-import asyncio
