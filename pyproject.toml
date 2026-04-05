@@ -24,13 +24,37 @@ keywords = ["orm", "database", "sql", "eloquent", "pydantic", "async"]
 dependencies = [
     "pydantic>=2.0.0",
     "pydantic-core>=2.0.0",
-    "asyncpg>=0.28.0",
-    "aiomysql>=0.2.0",
     "aiosqlite>=0.19.0",
     "typing-extensions>=4.0.0",
 ]
 
 [project.optional-dependencies]
+postgres = [
+    "asyncpg>=0.28.0",
+]
+mysql = [
+    "aiomysql>=0.2.0",
+]
+redis = [
+    "redis>=4.6.0",
+]
+factory = [
+    "faker>=18.0.0",
+]
+d1 = [
+    "httpx>=0.25.0",
+]
+fastapi = [
+    "fastapi>=0.100.0",
+]
+all = [
+    "asyncpg>=0.28.0",
+    "aiomysql>=0.2.0",
+    "redis>=4.6.0",
+    "faker>=18.0.0",
+    "httpx>=0.25.0",
+    "fastapi>=0.100.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
@@ -39,23 +63,12 @@ dev = [
     "ruff>=0.1.0",
     "pre-commit>=3.0.0",
 ]
-fastapi = [
-    "fastapi>=0.100.0",
-]
-all = [
-    "fastapi>=0.100.0",
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0",
-    "pytest-cov>=4.0.0",
-    "mypy>=1.0.0",
-    "ruff>=0.1.0",
-]
 
 [project.urls]
-Homepage = "https://github.com/pyloquent/pyloquent"
-Documentation = "https://pyloquent.readthedocs.io"
-Repository = "https://github.com/pyloquent/pyloquent"
-Issues = "https://github.com/pyloquent/pyloquent/issues"
+Homepage = "https://github.com/avltree9798/pyloquent"
+Documentation = "https://github.com/avltree9798/pyloquent/blob/master/DOCUMENTATION.md"
+Repository = "https://github.com/avltree9798/pyloquent"
+Issues = "https://github.com/avltree9798/pyloquent/issues"
 
 [project.scripts]
 pyloquent = "pyloquent.cli.main:main"
