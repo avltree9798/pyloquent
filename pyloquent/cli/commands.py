@@ -78,7 +78,7 @@ class MakeModelCommand(Command):
 
         # Create model file
         model_file = self.models_path / f"{name.lower()}.py"
-        table_name = table or self._pluralize(name.lower())
+        table_name = table or self._pluralise(name.lower())
 
         content = self._generate_model_content(name, table_name)
         model_file.write_text(content)
@@ -119,14 +119,14 @@ class {class_name}(Model):
     id: Optional[int] = None
 '''
 
-    def _pluralize(self, word: str) -> str:
-        """Simple pluralization.
+    def _pluralise(self, word: str) -> str:
+        """Simple pluralisation.
 
         Args:
-            word: Word to pluralize
+            word: Word to pluralise
 
         Returns:
-            Pluralized word
+            Pluralised word
         """
         if word.endswith("y") and word[-2] not in "aeiou":
             return word[:-1] + "ies"

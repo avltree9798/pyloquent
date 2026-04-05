@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional, Type, TypeVar
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from pyloquent.orm.model import Model
     from pyloquent.query.builder import QueryBuilder
 
@@ -67,25 +67,45 @@ class SoftDeletes:
         Returns:
             True on success
         """
-        # Set deleted_at timestamp
-        setattr(self, self.__deleted_at_column__, datetime.now())
+        if hasattr(self, "_fire_event"):
+            if await self._fire_event("deleting") is False:
+                return False
 
-        # Update the record
+        now = datetime.now()
+        setattr(self, self.__deleted_at_column__, now)
+
         query = self._new_query_without_scope().where(self.__primary_key__, self._get_key())
-        await query.update({self.__deleted_at_column__: datetime.now()})
+        await query.update({self.__deleted_at_column__: now})
+
+        if hasattr(self, "_fire_event"):
+            await self._fire_event("deleted")
 
         return True
 
     async def _perform_force_delete(self: T) -> bool:
-        """Perform the actual database deletion.
+        """Perform the actual (permanent) database deletion.
 
         Returns:
             True on success
         """
-        # Call parent delete method
-        from pyloquent.orm.model import Model
+        if hasattr(self, "_fire_event"):
+            if await self._fire_event("deleting") is False:
+                return False
 
-        return await super(SoftDeletes, self).delete()
+        key = self._get_key()
+        if key is None:
+            return False
+
+        query = self._new_query_without_scope().where(self.__primary_key__, key)
+        await query.delete()
+
+        self._exists = False
+        self._original = {}
+
+        if hasattr(self, "_fire_event"):
+            await self._fire_event("deleted")
+
+        return True
 
     async def restore(self: T) -> bool:
         """Restore a soft-deleted model.
@@ -96,12 +116,17 @@ class SoftDeletes:
         if not self.trashed():
             return False
 
-        # Clear deleted_at
+        if hasattr(self, "_fire_event"):
+            if await self._fire_event("restoring") is False:
+                return False
+
         setattr(self, self.__deleted_at_column__, None)
 
-        # Update the record
         query = self._new_query_without_scope().where(self.__primary_key__, self._get_key())
         await query.update({self.__deleted_at_column__: None})
+
+        if hasattr(self, "_fire_event"):
+            await self._fire_event("restored")
 
         return True
 

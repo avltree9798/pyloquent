@@ -1,9 +1,9 @@
 """Base grammar class for SQL compilation."""
 
 from abc import ABC
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from pyloquent.query.builder import QueryBuilder
 
 
@@ -111,6 +111,10 @@ class Grammar(ABC):
         # OFFSET
         if query._offset is not None:
             sql_parts.append(self._compile_offset(query))
+
+        # LOCK
+        if getattr(query, "_lock", None):
+            sql_parts.append(self._compile_lock(query))
 
         return " ".join(sql_parts), bindings
 
@@ -349,6 +353,14 @@ class Grammar(ABC):
             elif where.type == "not_null":
                 column = self._wrap_column(where.column)
                 sql_parts.append(f"{prefix}{column} IS NOT NULL")
+            elif where.type == "exists":
+                sub_sql, sub_bindings = self.compile_select(where.query)
+                sql_parts.append(f"{prefix}EXISTS ({sub_sql})")
+                bindings.extend(sub_bindings)
+            elif where.type == "not_exists":
+                sub_sql, sub_bindings = self.compile_select(where.query)
+                sql_parts.append(f"{prefix}NOT EXISTS ({sub_sql})")
+                bindings.extend(sub_bindings)
             elif where.type == "raw":
                 sql_parts.append(f"{prefix}{where.sql}")
                 if where.bindings:
@@ -537,20 +549,107 @@ class Grammar(ABC):
         """
         # Base implementation uses double quotes (ANSI SQL)
         # Override in driver-specific grammars
-        return f'"{value}"'
+        return f'"{value}"'  # pragma: no cover
 
     def _parameter(self, value: Any) -> str:
         """Get the parameter placeholder for a value.
 
         Args:
-            value: The value to parameterize
+            value: The value to parameterise
 
         Returns:
             Parameter placeholder string
         """
         # Base implementation uses ? (positional)
         # Override in driver-specific grammars if needed
-        return "?"
+        return "?"  # pragma: no cover
+
+    def compile_increment(
+        self, query: "QueryBuilder", column: str, amount: Any, extra: Dict[str, Any]
+    ) -> Tuple[str, List[Any]]:
+        """Compile an atomic increment UPDATE query.
+
+        Args:
+            query: The query builder instance
+            column: Column to increment
+            amount: Amount to increment by
+            extra: Additional columns to update
+
+        Returns:
+            Tuple of (SQL string, bindings list)
+        """
+        table = self._wrap_table(query._table)
+        col = self._wrap_column(column)
+        sets = [f"{col} = {col} + {self._parameter(amount)}"]
+        bindings: List[Any] = [amount]
+        for k, v in extra.items():
+            sets.append(f"{self._wrap_column(k)} = {self._parameter(v)}")
+            bindings.append(v)
+        sql_parts = [f"UPDATE {table} SET {', '.join(sets)}"]
+        if query._wheres:
+            wheres_sql, wheres_bindings = self._compile_wheres(query)
+            sql_parts.append(wheres_sql)
+            bindings.extend(wheres_bindings)
+        return " ".join(sql_parts), bindings
+
+    def compile_insert_or_ignore(
+        self, query: "QueryBuilder", values: List[Dict[str, Any]]
+    ) -> Tuple[str, List[Any]]:
+        """Compile an INSERT OR IGNORE query.
+
+        Args:
+            query: The query builder instance
+            values: List of row dictionaries
+
+        Returns:
+            Tuple of (SQL string, bindings list)
+        """
+        sql, bindings = self.compile_insert(query, values)
+        sql = sql.replace("INSERT INTO", "INSERT OR IGNORE INTO", 1)
+        return sql, bindings
+
+    def compile_upsert(
+        self,
+        query: "QueryBuilder",
+        values: List[Dict[str, Any]],
+        unique_by: List[str],
+        update_columns: List[str],
+    ) -> Tuple[str, List[Any]]:
+        """Compile an upsert (INSERT ... ON CONFLICT DO UPDATE) query.
+
+        Args:
+            query: The query builder instance
+            values: List of row dictionaries
+            unique_by: Columns that determine uniqueness
+            update_columns: Columns to update on conflict
+
+        Returns:
+            Tuple of (SQL string, bindings list)
+        """
+        sql, bindings = self.compile_insert(query, values)
+        conflict_cols = ", ".join(self._wrap_column(c) for c in unique_by)
+        updates = ", ".join(
+            f"{self._wrap_column(c)} = excluded.{self._wrap_column(c)}"
+            for c in update_columns
+        )
+        sql = f"{sql} ON CONFLICT ({conflict_cols}) DO UPDATE SET {updates}"
+        return sql, bindings
+
+    def _compile_lock(self, query: "QueryBuilder") -> str:
+        """Compile a row locking clause.
+
+        Args:
+            query: The query builder instance
+
+        Returns:
+            Lock SQL clause
+        """
+        lock = getattr(query, "_lock", None)
+        if lock == "for update":
+            return "FOR UPDATE"
+        if lock == "for share":
+            return "FOR SHARE"
+        return ""
 
     # ========================================================================
     # Schema Compilation

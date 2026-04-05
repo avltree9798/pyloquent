@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, List, Optional
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from pyloquent.query.builder import QueryBuilder
 
 
@@ -25,7 +25,7 @@ class WhereClause:
     bindings: List[Any] = field(default_factory=list)
 
     def __post_init__(self):
-        """Validate the where clause after initialization."""
+        """Validate the where clause after initialisation."""
         if self.type == "basic" and self.operator is None:
             raise ValueError("Operator is required for basic where clauses")
 

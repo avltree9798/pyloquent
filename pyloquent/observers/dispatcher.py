@@ -3,7 +3,7 @@
 import asyncio
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Type
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from pyloquent.orm.model import Model
 
 

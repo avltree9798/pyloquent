@@ -1,11 +1,21 @@
 """SQLite database connection using aiosqlite."""
 
+import sqlite3
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from pyloquent.database.connection import Connection
 from pyloquent.exceptions import QueryException
 
-if TYPE_CHECKING:
+# Register explicit datetime adapters/converters to avoid the Python 3.12
+# deprecation of the built-in default datetime adapter.
+sqlite3.register_adapter(datetime, lambda d: d.isoformat())
+sqlite3.register_adapter(date, lambda d: d.isoformat())
+sqlite3.register_converter("TIMESTAMP", lambda b: datetime.fromisoformat(b.decode()) if b else None)
+sqlite3.register_converter("DATETIME", lambda b: datetime.fromisoformat(b.decode()) if b else None)
+sqlite3.register_converter("DATE", lambda b: date.fromisoformat(b.decode()) if b else None)
+
+if TYPE_CHECKING:  # pragma: no cover
     from pyloquent.grammars.grammar import Grammar
 
 
@@ -44,6 +54,7 @@ class SQLiteConnection(Connection):
                 self._db_path,
                 timeout=self._timeout,
                 isolation_level=self._isolation_level,
+                detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
             )
             # Enable foreign keys
             await self._connection.execute("PRAGMA foreign_keys = ON")

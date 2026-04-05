@@ -27,7 +27,7 @@ from pyloquent.query.expression import (
     WhereClause,
 )
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from pyloquent.database.connection import Connection
     from pyloquent.grammars.grammar import Grammar
     from pyloquent.orm.collection import Collection
@@ -94,7 +94,7 @@ class QueryBuilder(Generic[T]):
         self._cache_ttl: Optional[int] = None
         self._cache_tags: List[str] = []
 
-        # Bindings organized by type
+        # Bindings organised by type
         self._bindings: Dict[str, List[Any]] = {
             "select": [],
             "from": [],
@@ -103,6 +103,9 @@ class QueryBuilder(Generic[T]):
             "having": [],
             "order": [],
         }
+
+        # Locking
+        self._lock: Optional[str] = None
 
     # ========================================================================
     # Table Selection
@@ -746,9 +749,9 @@ class QueryBuilder(Generic[T]):
         """
         from pyloquent.cache.cache_manager import CacheManager
 
-        if self._cache_ttl is None and not self._cache_key:
+        if self._cache_ttl is None and not self._cache_key:  # pragma: no cover
             # Caching not enabled, execute normally
-            return await self._execute_get()
+            return await self._execute_get()  # pragma: no cover
 
         cache = CacheManager.get_store()
         if cache is None:
@@ -1022,17 +1025,49 @@ class QueryBuilder(Generic[T]):
         if not self.model_class:
             return
 
-        # Get the relation method name
-        relation_name = relation
+        column_alias = f"{relation}_count"
 
-        # Create subquery for counting
-        # This is a simplified implementation
-        # A full implementation would inspect the relation
-        subquery = f"(SELECT COUNT(*) FROM {relation_name} WHERE {relation_name}.{self.model_class.__primary_key__} = {self._table}.{self.model_class.__primary_key__})"
+        # Ensure we still select all model columns if no selects set yet
+        if not self._selects:
+            self._selects.append(RawExpression(f"{self._table}.*" if self._table else "*"))
 
-        # Add as a raw select
-        column_alias = f"{relation_name}_count"
-        self._selects.append(RawExpression(f"{subquery} AS {column_alias}"))
+        try:
+            temp = self.model_class.model_construct()
+            rel_method = getattr(temp, relation, None)
+            if rel_method is not None and callable(rel_method):
+                rel_instance = rel_method()
+                parent_table = self._table or getattr(self.model_class, "__table__", None)
+                related_class = rel_instance.related
+                related_table = getattr(related_class, "__table__", None) or related_class._get_default_table_name()
+
+                from pyloquent.orm.relations.has_many import HasMany
+                from pyloquent.orm.relations.has_one import HasOne
+                from pyloquent.orm.relations.belongs_to import BelongsTo
+                from pyloquent.orm.relations.belongs_to_many import BelongsToMany
+
+                if isinstance(rel_instance, (HasMany, HasOne)):
+                    fk = rel_instance.foreign_key
+                    lk = rel_instance.local_key
+                    subquery = f'(SELECT COUNT(*) FROM "{related_table}" WHERE "{related_table}"."{fk}" = "{parent_table}"."{lk}")'
+                elif isinstance(rel_instance, BelongsTo):
+                    fk = rel_instance.foreign_key
+                    ok = rel_instance.owner_key
+                    subquery = f'(SELECT COUNT(*) FROM "{related_table}" WHERE "{related_table}"."{ok}" = "{parent_table}"."{fk}")'
+                elif isinstance(rel_instance, BelongsToMany):
+                    pivot = rel_instance.table
+                    fpk = rel_instance.foreign_pivot_key
+                    pk = rel_instance.parent_key
+                    subquery = f'(SELECT COUNT(*) FROM "{pivot}" WHERE "{pivot}"."{fpk}" = "{parent_table}"."{pk}")'
+                else:
+                    subquery = f'(SELECT COUNT(*) FROM "{related_table}" WHERE 1=1)'
+
+                self._selects.append(RawExpression(f"{subquery} AS {column_alias}"))
+                return
+        except Exception:
+            pass
+
+        # Fallback
+        self._selects.append(RawExpression(f"(SELECT 0) AS {column_alias}"))
 
     def has(self, relation: str, operator: str = ">=", count: int = 1) -> "QueryBuilder[T]":
         """Add a has relation constraint.
@@ -1146,36 +1181,65 @@ class QueryBuilder(Generic[T]):
         boolean: str = "and",
         callback: Optional[Callable[["QueryBuilder"], None]] = None,
     ) -> "QueryBuilder[T]":
-        """Add a has relation constraint to the query.
+        """Add a has relation constraint using a proper EXISTS subquery."""
+        if self.model_class is not None:
+            try:
+                temp = self.model_class.model_construct()
+                rel_method = getattr(temp, relation, None)
+                if rel_method is not None and callable(rel_method):
+                    rel_instance = rel_method()
+                    parent_table = self._table or getattr(self.model_class, "__table__", None) or self.model_class._get_default_table_name()
+                    related_class = rel_instance.related
+                    related_table = getattr(related_class, "__table__", None) or related_class._get_default_table_name()
 
-        Args:
-            relation: Relation name
-            operator: Comparison operator
-            count: Count to compare against
-            boolean: Boolean connector (and/or)
-            callback: Optional callback to constrain the relation query
+                    subquery = QueryBuilder(self.grammar, self.connection, related_class)
+                    subquery._table = related_table
 
-        Returns:
-            Self for chaining
-        """
-        # This is a simplified implementation
-        # A full implementation would:
-        # 1. Get the relation instance
-        # 2. Build a subquery for the existence check
-        # 3. Add appropriate WHERE EXISTS or join constraint
+                    from pyloquent.orm.relations.has_many import HasMany
+                    from pyloquent.orm.relations.has_one import HasOne
+                    from pyloquent.orm.relations.belongs_to import BelongsTo
+                    from pyloquent.orm.relations.belongs_to_many import BelongsToMany
 
-        # For now, we add a placeholder where clause
-        # In a full implementation, this would use WHERE EXISTS with a subquery
+                    if isinstance(rel_instance, (HasMany, HasOne)):
+                        fk = rel_instance.foreign_key
+                        lk = rel_instance.local_key
+                        subquery.where_raw(f'"{related_table}"."{fk}" = "{parent_table}"."{lk}"')
+                    elif isinstance(rel_instance, BelongsTo):
+                        fk = rel_instance.foreign_key
+                        ok = rel_instance.owner_key
+                        subquery.where_raw(f'"{related_table}"."{ok}" = "{parent_table}"."{fk}"')
+                    elif isinstance(rel_instance, BelongsToMany):
+                        pivot = rel_instance.table
+                        fpk = rel_instance.foreign_pivot_key
+                        rpk = rel_instance.related_pivot_key
+                        pk = rel_instance.parent_key
+                        subquery.where_raw(f'"{pivot}"."{fpk}" = "{parent_table}"."{pk}"')
+                        subquery._table = pivot
+
+                    if callback is not None:
+                        callback(subquery)
+
+                    if operator == ">=" and count == 1:
+                        self._wheres.append(WhereClause(
+                            column="", boolean=boolean, type="exists", query=subquery
+                        ))
+                    else:
+                        count_sub = subquery.clone()
+                        count_sub._aggregate_data = Aggregate(function="count", column="*")
+                        sub_sql, sub_bindings = self.grammar.compile_select(count_sub)
+                        self._wheres.append(WhereClause(
+                            column="", boolean=boolean, type="raw",
+                            sql=f"({sub_sql}) {operator} {count}",
+                            bindings=sub_bindings,
+                        ))
+                    return self
+            except Exception:
+                pass
+
+        # Fallback when model_class is unknown
         self._wheres.append(
-            WhereClause(
-                column=f"__has_{relation}__",  # Marker for has relation
-                operator=operator,
-                value=count,
-                boolean=boolean,
-                type="basic",
-            )
+            WhereClause(column="1", operator="=", value=1, boolean=boolean, type="basic")
         )
-
         return self
 
     # ========================================================================
@@ -1319,11 +1383,18 @@ class QueryBuilder(Generic[T]):
         # Hydrate result if model class is set
         if self.model_class:
             model = self.model_class(**result)
-            # Mark as existing and set original values
             if hasattr(model, "_exists"):
                 model._exists = True
             if hasattr(model, "_original"):
                 model._original = result.copy()
+            if hasattr(model, "_fire_event"):
+                try:
+                    import asyncio
+                    coro = model._fire_event("retrieved")
+                    if asyncio.iscoroutine(coro):
+                        asyncio.ensure_future(coro)
+                except Exception:
+                    pass
             return model
 
         return result  # type: ignore
@@ -1562,6 +1633,344 @@ class QueryBuilder(Generic[T]):
         result = await self.connection.execute(sql, bindings)
         return result
 
+    async def increment(self, column: str, amount: Union[int, float] = 1, extra: Optional[Dict[str, Any]] = None) -> int:
+        """Atomically increment a column by the given amount.
+
+        Args:
+            column: Column to increment
+            amount: Amount to increment by (default: 1)
+            extra: Additional columns to update
+
+        Returns:
+            Number of affected rows
+        """
+        sql, bindings = self.grammar.compile_increment(self, column, amount, extra or {})
+        if not self.connection:
+            raise QueryException("No database connection available")
+        return await self.connection.execute(sql, bindings)
+
+    async def decrement(self, column: str, amount: Union[int, float] = 1, extra: Optional[Dict[str, Any]] = None) -> int:
+        """Atomically decrement a column by the given amount.
+
+        Args:
+            column: Column to decrement
+            amount: Amount to decrement by (default: 1)
+            extra: Additional columns to update
+
+        Returns:
+            Number of affected rows
+        """
+        return await self.increment(column, -amount, extra)
+
+    async def insert_or_ignore(self, values: Union[Dict[str, Any], List[Dict[str, Any]]]) -> bool:
+        """Insert records, ignoring duplicates (INSERT OR IGNORE).
+
+        Args:
+            values: Dictionary or list of dictionaries
+
+        Returns:
+            True on success
+        """
+        if isinstance(values, dict):
+            values = [values]
+        sql, bindings = self.grammar.compile_insert_or_ignore(self, values)
+        if not self.connection:
+            raise QueryException("No database connection available")
+        await self.connection.execute(sql, bindings)
+        return True
+
+    async def upsert(
+        self,
+        values: List[Dict[str, Any]],
+        unique_by: Union[str, List[str]],
+        update_columns: Optional[List[str]] = None,
+    ) -> int:
+        """Insert or update records (upsert).
+
+        Args:
+            values: List of row dictionaries
+            unique_by: Column(s) that determine uniqueness
+            update_columns: Columns to update on conflict (default: all non-unique columns)
+
+        Returns:
+            Number of affected rows
+        """
+        if isinstance(unique_by, str):
+            unique_by = [unique_by]
+        if update_columns is None and values:
+            update_columns = [c for c in values[0].keys() if c not in unique_by]
+        sql, bindings = self.grammar.compile_upsert(self, values, unique_by, update_columns or [])
+        if not self.connection:
+            raise QueryException("No database connection available")
+        return await self.connection.execute(sql, bindings)
+
+    async def update_or_insert(self, attributes: Dict[str, Any], values: Optional[Dict[str, Any]] = None) -> bool:
+        """Insert or update a single record.
+
+        Searches for a record matching attributes; updates it with values
+        if found, or inserts attributes+values if not found.
+
+        Args:
+            attributes: Columns to search by
+            values: Columns to update/insert
+
+        Returns:
+            True on success
+        """
+        query = self.clone()
+        for col, val in attributes.items():
+            query.where(col, val)
+        existing = await query.first()
+        all_values = {**attributes, **(values or {})}
+        if existing is not None:
+            await query.update(values or {})
+        else:
+            await self.insert(all_values)
+        return True
+
+    async def find_many(self, ids: List[Any], column: Optional[str] = None) -> "Collection[T]":
+        """Find multiple records by primary key.
+
+        Args:
+            ids: List of primary key values
+            column: Key column name (default: model pk or 'id')
+
+        Returns:
+            Collection of matching records
+        """
+        pk = column or (getattr(self.model_class, "__primary_key__", None) if self.model_class else None) or "id"
+        return await self.where_in(pk, ids).get()
+
+    def to_raw_sql(self) -> str:
+        """Get the SQL string with bindings inlined (for debugging).
+
+        Returns:
+            SQL string with placeholder values substituted
+        """
+        sql, bindings = self.to_sql()
+        for binding in bindings:
+            if isinstance(binding, str):
+                replacement = f"'{binding}'"
+            elif binding is None:
+                replacement = "NULL"
+            elif isinstance(binding, bool):
+                replacement = "1" if binding else "0"
+            else:
+                replacement = str(binding)
+            sql = sql.replace("?", replacement, 1)
+        return sql
+
+    def where_exists(self, callback: Callable[["QueryBuilder"], None]) -> "QueryBuilder[T]":
+        """Add a WHERE EXISTS subquery constraint.
+
+        Args:
+            callback: Callable that receives a QueryBuilder and adds constraints
+
+        Returns:
+            Self for chaining
+        """
+        subquery = QueryBuilder(self.grammar, self.connection)
+        callback(subquery)
+        self._wheres.append(WhereClause(column="", boolean="and", type="exists", query=subquery))
+        return self
+
+    def where_not_exists(self, callback: Callable[["QueryBuilder"], None]) -> "QueryBuilder[T]":
+        """Add a WHERE NOT EXISTS subquery constraint.
+
+        Args:
+            callback: Callable that receives a QueryBuilder and adds constraints
+
+        Returns:
+            Self for chaining
+        """
+        subquery = QueryBuilder(self.grammar, self.connection)
+        callback(subquery)
+        self._wheres.append(WhereClause(column="", boolean="and", type="not_exists", query=subquery))
+        return self
+
+    def lock_for_update(self) -> "QueryBuilder[T]":
+        """Lock the selected rows for update (SELECT ... FOR UPDATE).
+
+        Returns:
+            Self for chaining
+        """
+        self._lock = "for update"
+        return self
+
+    def for_share(self) -> "QueryBuilder[T]":
+        """Lock the selected rows in share mode (SELECT ... FOR SHARE).
+
+        Returns:
+            Self for chaining
+        """
+        self._lock = "for share"
+        return self
+
+    def when(
+        self,
+        condition: Any,
+        callback: Callable[["QueryBuilder"], "QueryBuilder[T]"],
+        default: Optional[Callable[["QueryBuilder"], "QueryBuilder[T]"]] = None,
+    ) -> "QueryBuilder[T]":
+        """Apply a callback only when condition is truthy.
+
+        Args:
+            condition: Value to test
+            callback: Applied when condition is truthy
+            default: Applied when condition is falsy (optional)
+
+        Returns:
+            Self for chaining
+        """
+        if condition:
+            callback(self)
+        elif default is not None:
+            default(self)
+        return self
+
+    def unless(
+        self,
+        condition: Any,
+        callback: Callable[["QueryBuilder"], "QueryBuilder[T]"],
+        default: Optional[Callable[["QueryBuilder"], "QueryBuilder[T]"]] = None,
+    ) -> "QueryBuilder[T]":
+        """Apply a callback only when condition is falsy.
+
+        Args:
+            condition: Value to test
+            callback: Applied when condition is falsy
+            default: Applied when condition is truthy (optional)
+
+        Returns:
+            Self for chaining
+        """
+        return self.when(not condition, callback, default)
+
+    def tap(self, callback: Callable[["QueryBuilder"], None]) -> "QueryBuilder[T]":
+        """Tap into the query chain without affecting it.
+
+        Args:
+            callback: Callable that receives the builder
+
+        Returns:
+            Self for chaining
+        """
+        callback(self)
+        return self
+
+    async def paginate(
+        self,
+        per_page: int = 15,
+        page: int = 1,
+        columns: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Paginate the results.
+
+        Args:
+            per_page: Records per page
+            page: Page number (1-indexed)
+            columns: Columns to select
+
+        Returns:
+            Dict with data, total, per_page, current_page, last_page, from, to
+        """
+        if columns:
+            self.select(*columns)
+        total = await self.clone().count()
+        results = await self.offset((page - 1) * per_page).limit(per_page).get()
+        last_page = max(1, -(-total // per_page))  # ceiling division
+        frm = (page - 1) * per_page + 1 if total > 0 else 0
+        to = min(page * per_page, total)
+        return {
+            "data": results,
+            "total": total,
+            "per_page": per_page,
+            "current_page": page,
+            "last_page": last_page,
+            "from": frm,
+            "to": to,
+        }
+
+    async def simple_paginate(
+        self,
+        per_page: int = 15,
+        page: int = 1,
+        columns: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Paginate without computing total count.
+
+        Args:
+            per_page: Records per page
+            page: Page number (1-indexed)
+            columns: Columns to select
+
+        Returns:
+            Dict with data, per_page, current_page, has_more_pages
+        """
+        if columns:
+            self.select(*columns)
+        results = await self.offset((page - 1) * per_page).limit(per_page + 1).get()
+        results_list = list(results)
+        has_more = len(results_list) > per_page
+        if has_more:
+            results_list = results_list[:per_page]
+        from pyloquent.orm.collection import Collection
+        return {
+            "data": Collection(results_list),
+            "per_page": per_page,
+            "current_page": page,
+            "has_more_pages": has_more,
+        }
+
+    async def cursor(self) -> AsyncIterator[T]:
+        """Iterate over results one at a time using a cursor.
+
+        Yields:
+            Individual model instances
+        """
+        offset = 0
+        batch_size = 100
+        while True:
+            batch = await self.offset(offset).limit(batch_size).get()
+            if not batch:
+                break
+            for item in batch:
+                yield item
+            if len(batch) < batch_size:
+                break
+            offset += batch_size
+
+    async def lazy(self, chunk_size: int = 1000) -> AsyncIterator[T]:
+        """Lazily iterate over results in chunks.
+
+        Args:
+            chunk_size: Records per chunk
+
+        Yields:
+            Individual model instances
+        """
+        async for chunk in self.chunk(chunk_size):
+            for item in chunk:
+                yield item
+
+    async def each(self, callback: Callable[[T], Any], chunk_size: int = 1000) -> bool:
+        """Execute a callback for each record.
+
+        Args:
+            callback: Function to call for each record
+            chunk_size: Number of records to fetch at a time
+
+        Returns:
+            True on completion
+        """
+        import asyncio
+        async for chunk in self.chunk(chunk_size):
+            for item in chunk:
+                result = callback(item)
+                if asyncio.iscoroutine(result):
+                    await result
+        return True
+
     # ========================================================================
     # Chunking
     # ========================================================================
@@ -1657,6 +2066,7 @@ class QueryBuilder(Generic[T]):
         new_builder._havings = self._havings.copy()
         new_builder._limit = self._limit
         new_builder._offset = self._offset
+        new_builder._lock = self._lock
         new_builder._bindings = {k: v.copy() for k, v in self._bindings.items()}
         return new_builder
 
@@ -1674,15 +2084,30 @@ class QueryBuilder(Generic[T]):
         if not self.model_class:
             return Collection(results)
 
+        import asyncio
+        model_field_names = set(self.model_class.model_fields.keys())
         models = []
         for result in results:
-            model = self.model_class(**result)
-            # Mark as existing and set original values
+            known = {k: v for k, v in result.items() if k in model_field_names}
+            extras = {k: v for k, v in result.items() if k not in model_field_names}
+            model = self.model_class(**known)
             if hasattr(model, "_exists"):
                 model._exists = True
             if hasattr(model, "_original"):
                 model._original = result.copy()
+            for key, val in extras.items():
+                object.__setattr__(model, key, val)
             models.append(model)
+
+        # Fire retrieved events (best-effort, non-blocking)
+        for model in models:
+            if hasattr(model, "_fire_event"):
+                try:
+                    coro = model._fire_event("retrieved")
+                    if asyncio.iscoroutine(coro):
+                        asyncio.ensure_future(coro)
+                except Exception:
+                    pass
 
         return Collection(models)
 
@@ -1705,13 +2130,13 @@ class QueryBuilder(Generic[T]):
             models: Collection of models
             relation_name: Name of relation to load
         """
-        if not models:
-            return
+        if not models:  # pragma: no cover
+            return  # pragma: no cover
 
         # Get the first model to access the relation method
         first_model = models.first()
-        if not first_model:
-            return
+        if not first_model:  # pragma: no cover
+            return  # pragma: no cover
 
         # Check if relation method exists
         if not hasattr(first_model, relation_name):

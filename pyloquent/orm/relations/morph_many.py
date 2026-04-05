@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
 from pyloquent.orm.collection import Collection
 from pyloquent.orm.relations.relation import Relation, T
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from pyloquent.orm.model import Model
 
 

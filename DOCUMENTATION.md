@@ -2,7 +2,7 @@
 
 > **Eloquent-inspired ORM for Python with Pydantic integration and async support**
 
-Pyloquent brings the elegant ORM patterns from Laravel's Eloquent to Python, with full async/await support, Pydantic validation, and FastAPI integration.
+Pyloquent brings the elegant ORM patterns from Laravel's Eloquent to Python, with full async/await support, Pydantic v2 validation, and FastAPI integration.
 
 ---
 
@@ -11,32 +11,42 @@ Pyloquent brings the elegant ORM patterns from Laravel's Eloquent to Python, wit
 - [Installation](#installation)
 - [Getting Started](#getting-started)
 - [Models](#models)
-  - [Generating Models](#generating-models)
   - [Model Conventions](#model-conventions)
   - [Default Attribute Values](#default-attribute-values)
+  - [Hidden & Visible Fields](#hidden--visible-fields)
+  - [Instance Methods](#instance-methods)
 - [Retrieving Models](#retrieving-models)
-  - [Collections](#collections)
   - [Chunking Results](#chunking-results)
+  - [Pagination](#pagination)
+  - [Cursor Streaming](#cursor-streaming)
 - [Inserting & Updating Models](#inserting--updating-models)
   - [Inserts](#inserts)
   - [Updates](#updates)
+  - [Upsert & Bulk Operations](#upsert--bulk-operations)
+  - [Increment & Decrement](#increment--decrement)
   - [Mass Assignment](#mass-assignment)
 - [Deleting Models](#deleting-models)
   - [Soft Deletes](#soft-deletes)
 - [Query Builder](#query-builder)
-  - [Retrieving All Rows](#retrieving-all-rows)
   - [Where Clauses](#where-clauses)
+  - [WHERE EXISTS / NOT EXISTS](#where-exists--not-exists)
+  - [Conditional Clauses](#conditional-clauses)
   - [Ordering, Grouping, Limit](#ordering-grouping-limit)
   - [Aggregates](#aggregates)
   - [Joins](#joins)
+  - [Row Locking](#row-locking)
+  - [Debugging Queries](#debugging-queries)
 - [Relationships](#relationships)
   - [One to One](#one-to-one)
   - [One to Many](#one-to-many)
   - [Belongs To](#belongs-to)
   - [Many to Many](#many-to-many)
+  - [Has One Through](#has-one-through)
+  - [Has Many Through](#has-many-through)
   - [Polymorphic Relationships](#polymorphic-relationships)
+  - [Polymorphic Many-to-Many](#polymorphic-many-to-many)
   - [Querying Relations](#querying-relations)
-- [Collections](#collections-1)
+- [Collections](#collections)
 - [Mutators & Casting](#mutators--casting)
 - [Query Scopes](#query-scopes)
 - [Events & Observers](#events--observers)
@@ -57,23 +67,12 @@ pip install pyloquent
 ### Optional Dependencies
 
 ```bash
-# For PostgreSQL
-pip install pyloquent[postgres]
-
-# For MySQL
-pip install pyloquent[mysql]
-
-# For Redis caching
-pip install pyloquent[redis]
-
-# For model factories
-pip install pyloquent[factory]
-
-# For Cloudflare D1 HTTP API
-pip install pyloquent[d1]
-
-# Install everything
-pip install pyloquent[all]
+pip install pyloquent[postgres]   # PostgreSQL via asyncpg
+pip install pyloquent[mysql]      # MySQL via aiomysql
+pip install pyloquent[redis]      # Redis caching
+pip install pyloquent[factory]    # Model factories (faker)
+pip install pyloquent[d1]         # Cloudflare D1 HTTP API
+pip install pyloquent[all]        # Everything
 ```
 
 ---
@@ -84,14 +83,14 @@ pip install pyloquent[all]
 
 ```python
 from pyloquent import ConnectionManager
+from pyloquent.database.manager import set_manager
 
-# Create manager
 manager = ConnectionManager()
 
-# SQLite
+# SQLite (great for development/testing)
 manager.add_connection('default', {
     'driver': 'sqlite',
-    'database': 'database.db',  # or ':memory:' for testing
+    'database': 'database.db',   # or ':memory:' for tests
 }, default=True)
 
 # PostgreSQL
@@ -114,7 +113,7 @@ manager.add_connection('mysql', {
     'password': 'secret',
 })
 
-# Connect
+set_manager(manager)   # make globally available to all models
 await manager.connect()
 ```
 
@@ -127,7 +126,7 @@ from pyloquent import Model
 class User(Model):
     __table__ = 'users'
     __fillable__ = ['name', 'email', 'age']
-    
+
     id: Optional[int] = None
     name: str
     email: str
@@ -138,41 +137,26 @@ class User(Model):
 
 ## Models
 
-### Generating Models
-
-Use the CLI to generate models:
-
-```bash
-# Create a model
-pyloquent make:model User
-
-# Create a model with migration
-pyloquent make:model User --migration
-
-# Create a model with explicit table name
-pyloquent make:model User --table=admins
-```
-
 ### Model Conventions
 
 | Feature | Convention | Override |
 |---------|-----------|----------|
-| Table name | Pluralized snake_case | `__table__ = 'custom'` |
+| Table name | Pluralised snake_case | `__table__ = 'custom'` |
 | Primary key | `id` | `__primary_key__ = 'uuid'` |
 | Timestamps | `created_at`, `updated_at` | `__timestamps__ = False` |
-| Foreign key | Model name + `_id` | Specify in relation |
+| Per-page (pagination) | 15 | `__per_page__ = 25` |
+| Foreign key | ModelName + `_id` | Specify in relation |
+| Connection | `'default'` | `__connection__ = 'postgres'` |
 
 ```python
 class Flight(Model):
-    # Table: flights
-    # Primary key: id
-    # Timestamps: enabled by default
-    
-    __table__ = 'my_flights'
+    __table__       = 'my_flights'
     __primary_key__ = 'flight_id'
-    __timestamps__ = False
-    
-    id: Optional[int] = None
+    __timestamps__  = False
+    __per_page__    = 25
+    __connection__  = 'postgres'   # named connection
+
+    flight_id: Optional[int] = None
     flight_number: str
     origin: str
     destination: str
@@ -181,102 +165,168 @@ class Flight(Model):
 ### Default Attribute Values
 
 ```python
-from datetime import datetime
-from typing import Optional
-from pyloquent import Model
+class Post(Model):
+    __table__    = 'posts'
+    __fillable__ = ['title', 'status', 'published_at']
 
-class Flight(Model):
-    __table__ = 'flights'
-    __fillable__ = ['flight_number', 'status', 'boarded_at']
-    
     id: Optional[int] = None
-    flight_number: str
-    status: str = 'pending'  # Default value
-    boarded_at: Optional[datetime] = None
+    title: str
+    status: str = 'draft'          # default value
+    published_at: Optional[datetime] = None
+```
+
+### Hidden & Visible Fields
+
+```python
+class User(Model):
+    __hidden__  = ['password', 'remember_token']  # excluded from to_dict() / json()
+    __visible__ = []                               # if set, ONLY these are included
+    __appends__ = ['full_name']                    # computed properties added to output
+
+    password: str
+    remember_token: Optional[str] = None
+
+    def get_full_name_attribute(self):
+        return f'{self.first_name} {self.last_name}'
+```
+
+Per-instance overrides:
+
+```python
+user = await User.find(1)
+
+user.make_visible('password')         # show normally-hidden fields
+user.make_hidden('email')             # hide normally-visible fields
+user.append('full_name')              # add computed attribute
+d = user.to_dict()                    # respects all overrides
+j = user.json()                       # JSON string
+```
+
+### Instance Methods
+
+```python
+user = await User.find(1)
+
+# Fill and save
+await user.update({'name': 'New Name', 'age': 31})
+
+# Atomic column changes
+await user.increment('login_count')          # +1
+await user.increment('score', 10)            # +10
+await user.decrement('credits', 5)           # -5
+
+# Update timestamp only
+await user.touch()
+
+# Duplicate the record
+replica = await user.replicate({'email': 'copy@example.com'})
+
+# Change tracking
+user.name = 'Changed'
+await user.save()
+print(user.was_changed('name'))   # True
+print(user.get_changes())         # {'name': 'Changed'}
+
+# Key helpers
+print(user.get_key())       # value of primary key
+print(user.get_key_name())  # 'id'
+
+# Serialisation
+user.to_dict()    # dict respecting __hidden__ / make_visible / make_hidden
+user.to_array()   # alias for to_dict()
+user.json()       # JSON string
 ```
 
 ---
 
 ## Retrieving Models
 
-### Retrieving All Models
-
 ```python
-# All users
+# All records → Collection
 users = await User.all()
 
-# Chunked - memory efficient for large datasets
-async for users in User.chunk(100):
-    for user in users:
-        print(user.name)
-```
-
-### Retrieving Single Models
-
-```python
-# Find by primary key
+# Find by primary key (None if missing)
 user = await User.find(1)
 
-# Find or throw exception
-user = await User.find_or_fail(1)  # Raises ModelNotFoundException
+# Find or raise ModelNotFoundException
+user = await User.find_or_fail(1)
 
-# Find first matching
-user = await User.where('email', 'john@example.com').first()
+# Find many by primary keys → Collection
+users = await User.find_many([1, 2, 3])
 
-# First or create
+# First matching record
+user = await User.where('email', 'alice@example.com').first()
+
+# First or return new unsaved instance
+user = await User.first_or_new({'email': 'new@example.com'}, {'name': 'New'})
+
+# First or raise ModelNotFoundException
+user = await User.first_or_fail({'active': True})
+
+# First or create (saves the record)
 user = await User.first_or_create(
-    {'email': 'john@example.com'},
-    {'name': 'John Doe'}
+    {'email': 'alice@example.com'},
+    {'name': 'Alice', 'age': 30}
 )
 
 # Update or create
 user = await User.update_or_create(
-    {'email': 'john@example.com'},
-    {'name': 'John Doe', 'age': 30}
+    {'email': 'alice@example.com'},
+    {'name': 'Alice Updated'}
 )
+
+# Check existence
+exists = await User.where('email', 'alice@example.com').exists()
+missing = await User.where('email', 'ghost@example.com').doesnt_exist()
+
+# Scalar value
+name = await User.where('id', 1).value('name')
+
+# Destroy by primary keys (returns count)
+await User.destroy(1, 2, 3)
 ```
 
-### Not Found Exceptions
+### Chunking Results
 
 ```python
-from pyloquent import ModelNotFoundException
-
-try:
-    user = await User.find_or_fail(1)
-except ModelNotFoundException:
-    print("User not found")
+# Process 100 records at a time
+async for chunk in User.chunk(100):
+    for user in chunk:
+        await process(user)
 ```
 
-### Collections
-
-Results are returned as Collection instances:
+### Pagination
 
 ```python
-users = await User.all()
+# Full pagination (executes COUNT + SELECT)
+page = await User.paginate(per_page=15, page=2)
+# Returns:
+# {
+#   'data': [<User>, ...],
+#   'total': 120,
+#   'per_page': 15,
+#   'current_page': 2,
+#   'last_page': 8,
+#   'from': 16,
+#   'to': 30,
+# }
 
-# Check if empty
-if users.is_empty():
-    print("No users")
+# Simple pagination (no COUNT, cheaper)
+page = await User.simple_paginate(per_page=15, page=2)
+# {'data': [...], 'per_page': 15, 'current_page': 2, 'has_more': True}
+```
 
-# Count
-count = users.count()
+### Cursor Streaming
 
-# First / Last
-first = users.first()
-last = users.last()
+Memory-efficient iteration without loading all records:
 
-# Map
-names = users.map(lambda u: u.name.upper())
+```python
+async for user in User.query.cursor():
+    await process(user)
 
-# Filter
-adults = users.filter(lambda u: u.age and u.age >= 18)
-
-# Pluck
-emails = users.pluck('email')
-
-# Sort
-sorted_users = users.sort_by('name')
-sorted_desc = users.sort_by_desc('created_at')
+# Or collect lazily
+async for user in User.query.lazy(100):   # buffered in chunks of 100
+    await process(user)
 ```
 
 ---
@@ -286,55 +336,79 @@ sorted_desc = users.sort_by_desc('created_at')
 ### Inserts
 
 ```python
-# Create and save
+# Instantiate and save
 user = User(name='John', email='john@example.com')
 await user.save()
 
-# Create with dictionary
-user = await User.create({
-    'name': 'John',
-    'email': 'john@example.com',
-    'age': 30
-})
+# Create in one call
+user = await User.create({'name': 'John', 'email': 'john@example.com'})
 
-# Create via relationship
-user = await User.find(1)
-post = await user.posts().create({
-    'title': 'My First Post',
-    'content': 'Hello World!'
-})
+# Batch insert (raw, no model events)
+await User.query.insert([
+    {'name': 'Alice', 'email': 'alice@example.com'},
+    {'name': 'Bob',   'email': 'bob@example.com'},
+])
 ```
 
 ### Updates
 
 ```python
-# Fetch and update
+# Save dirty attributes
 user = await User.find(1)
-user.name = 'Jane Doe'
+user.name = 'Jane'
 await user.save()
 
-# Mass update
-await User.where('active', False).update({'status': 'inactive'})
+# Fluent update
+await user.update({'name': 'Jane', 'age': 31})
 
-# Update or create
-user = await User.update_or_create(
-    {'email': 'john@example.com'},
-    {'name': 'John Doe', 'age': 31}
+# Mass update via query
+await User.where('active', False).update({'status': 'inactive'})
+```
+
+### Upsert & Bulk Operations
+
+```python
+# Insert rows; skip (silently) on unique constraint violation
+await User.query.insert_or_ignore([
+    {'email': 'alice@example.com', 'name': 'Alice'},
+    {'email': 'new@example.com',   'name': 'New'},
+])
+
+# Insert rows or update specific columns on conflict
+await User.query.upsert(
+    values=[
+        {'email': 'alice@example.com', 'name': 'Alice', 'score': 100},
+        {'email': 'bob@example.com',   'name': 'Bob',   'score': 80},
+    ],
+    unique_by=['email'],
+    update_columns=['name', 'score'],
 )
+
+# Find or insert; update if found
+await User.query.update_or_insert(
+    {'email': 'alice@example.com'},   # search criteria
+    {'name': 'Alice', 'score': 50},   # values to set
+)
+```
+
+### Increment & Decrement
+
+```python
+# Query-level (bulk)
+await User.where('active', True).increment('score', 1)
+await User.where('level', 1).decrement('health', 10)
+
+# Instance-level (also updates the in-memory attribute)
+await user.increment('login_count')
+await user.decrement('credits', 5, extra={'last_action': 'purchase'})
 ```
 
 ### Mass Assignment
 
 ```python
 class User(Model):
-    __fillable__ = ['name', 'email', 'age']  # Allowed
-    __guarded__ = ['id', 'is_admin']          # Protected
-    
-    id: Optional[int] = None
-    name: str
-    email: str
-    age: Optional[int] = None
-    is_admin: bool = False
+    __fillable__ = ['name', 'email', 'age']   # allowed
+    __guarded__  = ['id', 'is_admin']         # blocked
 ```
 
 ---
@@ -342,15 +416,11 @@ class User(Model):
 ## Deleting Models
 
 ```python
-# Delete a single model
 user = await User.find(1)
 await user.delete()
 
-# Delete by query
+# Bulk delete
 await User.where('active', False).delete()
-
-# Delete all (use with caution!)
-await User.query.delete()
 
 # Truncate
 await User.query.truncate()
@@ -361,152 +431,196 @@ await User.query.truncate()
 ```python
 from datetime import datetime
 from typing import Optional
-from pyloquent import Model
-from pyloquent.traits import SoftDeletes
+from pyloquent import Model, SoftDeletes
 
 class Post(Model, SoftDeletes):
-    __table__ = 'posts'
+    __table__    = 'posts'
     __fillable__ = ['title', 'content']
-    
+
     id: Optional[int] = None
     title: str
     content: str
-    deleted_at: Optional[datetime] = None  # Required for SoftDeletes
+    deleted_at: Optional[datetime] = None   # required field
 
-# Usage
-post = await Post.find(1)
-await post.delete()  # Soft delete - sets deleted_at
+# Soft delete — sets deleted_at
+await post.delete()
 
 # Restore
 await post.restore()
 
-# Force delete (permanent)
+# Permanent delete (bypasses soft delete)
 await post.force_delete()
 
-# Query soft deletes
-posts = await Post.with_trashed().get()      # Include soft deleted
-trashed = await Post.only_trashed().get()    # Only soft deleted
+# Check status
+post.trashed()   # True / False
+
+# Query variants
+posts   = await Post.with_trashed().get()    # include soft-deleted
+trashed = await Post.only_trashed().get()    # only soft-deleted
+active  = await Post.without_trashed().get() # exclude soft-deleted (default)
+```
+
+**Soft delete events** — `deleting`, `deleted`, `restoring`, `restored` are all fired:
+
+```python
+Post.on('deleting',  lambda p: log(f'soft-deleting {p.id}'))
+Post.on('restoring', lambda p: False if p.is_protected else None)  # abort
 ```
 
 ---
 
 ## Query Builder
 
-### Retrieving All Rows
-
-```python
-users = await User.query.get()
-```
-
 ### Where Clauses
 
 ```python
-# Basic where
-users = await User.where('age', '>', 18).get()
+# Equality (shorthand)
+User.where('age', 18)
 
-# Multiple conditions (AND)
-users = await User.where('age', '>', 18).where('active', True).get()
+# Operator
+User.where('age', '>=', 18)
+User.where('name', 'like', 'Ali%')
 
-# OR where
-users = await User.where('age', '>', 18).or_where('vip', True).get()
+# Multiple ANDs
+User.where('age', '>=', 18).where('active', True)
 
-# Where in
-users = await User.where_in('id', [1, 2, 3]).get()
+# OR
+User.where('age', '>=', 18).or_where('vip', True)
 
-# Where not in
-users = await User.where_not_in('id', [4, 5, 6]).get()
+# IN / NOT IN
+User.where_in('id', [1, 2, 3])
+User.where_not_in('status', ['banned', 'pending'])
 
-# Where between
-users = await User.where_between('age', [18, 65]).get()
+# BETWEEN
+User.where_between('age', [18, 65])
+User.where_not_between('score', [0, 10])
 
-# Where null
-users = await User.where_null('deleted_at').get()
+# NULL
+User.where_null('deleted_at')
+User.where_not_null('email_verified_at')
 
-# Where not null
-users = await User.where_not_null('email_verified_at').get()
+# Column comparison
+User.where_column('updated_at', '>', 'created_at')
 
-# Nested where
-users = await User.where(lambda q: (
-    q.where('age', '<', 18).or_where('age', '>', 65)
-)).get()
+# Raw
+User.where_raw('LOWER(email) = ?', ['alice@example.com'])
+
+# Nested closure
+User.where(lambda q: q.where('age', '<', 18).or_where('age', '>', 65))
 ```
+
+### WHERE EXISTS / NOT EXISTS
+
+```python
+# Users who have at least one published post
+users = await User.where_exists(
+    lambda q: q.from_('posts')
+               .where_raw('"posts"."user_id" = "users"."id"')
+               .where('posts.published', True)
+).get()
+
+# Users with no orders
+users = await User.where_not_exists(
+    lambda q: q.from_('orders').where_raw('"orders"."user_id" = "users"."id"')
+).get()
+```
+
+### Conditional Clauses
+
+```python
+search = request.get('name')
+active_only = True
+
+results = await (
+    User.query
+    .when(search,      lambda q: q.where('name', 'like', f'%{search}%'))
+    .unless(not active_only, lambda q: q.where('active', True))
+    .tap(lambda q: logger.debug(q.to_raw_sql()))
+    .get()
+)
+```
+
+- **`when(condition, callback)`** — applies `callback` only when `condition` is truthy
+- **`unless(condition, callback)`** — applies `callback` only when `condition` is falsy
+- **`tap(callback)`** — side-effect (logging, debugging) without modifying the query
 
 ### Ordering, Grouping, Limit
 
 ```python
-# Order by
-users = await User.order_by('name').get()
-users = await User.order_by('created_at', 'desc').get()
+User.order_by('name')
+User.order_by('created_at', 'desc')
+User.latest()            # ORDER BY created_at DESC
+User.latest('updated_at')
+User.oldest()            # ORDER BY created_at ASC
 
-# Latest / Oldest
-users = await User.latest().get()  # by created_at
-users = await User.latest('updated_at').get()
+User.group_by('status')
+User.group_by('status').having('count', '>', 5)
 
-# Group by
-users = await User.group_by('status').get()
-
-# Having
-users = await User.group_by('status').having('count', '>', 5).get()
-
-# Limit / Offset
-users = await User.limit(10).get()
-users = await User.offset(10).limit(10).get()
-
-# Pagination helper
-users = await User.for_page(2, 15).get()  # Page 2, 15 per page
+User.limit(10)
+User.offset(20).limit(10)
+User.for_page(page=3, per_page=15)
 ```
 
 ### Aggregates
 
 ```python
-# Count
-count = await User.where('active', True).count()
-
-# Max / Min
-oldest = await User.max('age')
-youngest = await User.min('age')
-
-# Sum / Avg
-total = await User.sum('points')
-average = await User.avg('age')
+await User.count()
+await User.where('active', True).count()
+await User.max('age')
+await User.min('age')
+await User.sum('points')
+await User.avg('age')
+await User.value('name')   # scalar value of first row's column
 ```
 
 ### Selects
 
 ```python
-# Select specific columns
-users = await User.select('name', 'email').get()
-
-# Distinct
-users = await User.distinct().select('country').get()
-
-# Add select
-users = await User.select('name').add_select('email').get()
-
-# Raw expressions
-users = await User.select_raw('COUNT(*) as total').get()
+User.select('name', 'email')
+User.select_raw('COUNT(*) as total, status')
+User.distinct().select('country')
+User.add_select('created_at')
 ```
 
 ### Joins
 
 ```python
-# Inner join
-users = await User.join('posts', 'users.id', '=', 'posts.user_id').get()
+User.join('posts', 'users.id', '=', 'posts.user_id')
+User.left_join('posts', 'users.id', '=', 'posts.user_id')
+User.right_join('posts', 'users.id', '=', 'posts.user_id')
+User.cross_join('categories')
 
-# Left join
-users = await User.left_join('posts', 'users.id', '=', 'posts.user_id').get()
+# Advanced join with closure
+User.join('posts', lambda j: (
+    j.on('users.id', '=', 'posts.user_id')
+     .where('posts.published', True)
+))
+```
 
-# Right join
-users = await User.right_join('posts', 'users.id', '=', 'posts.user_id').get()
+### Row Locking
 
-# Cross join
-users = await User.cross_join('categories').get()
+```python
+# Lock for update — prevents other transactions reading until commit
+user = await User.where('id', 1).lock_for_update().first()
 
-# Advanced join with callback
-users = await User.join('posts', lambda join: (
-    join.on('users.id', '=', 'posts.user_id')
-        .where('posts.published', True)
-)).get()
+# Shared lock — others can read but not write
+user = await User.where('id', 1).for_share().first()
+```
+
+> **Note:** Row locking is a no-op on SQLite. It is fully honoured on PostgreSQL and MySQL.
+
+### Debugging Queries
+
+```python
+# Get parameterised SQL and bindings
+sql, bindings = User.where('active', True).to_sql()
+print(sql)       # SELECT * FROM "users" WHERE "active" = ?
+print(bindings)  # [True]
+
+# Get final SQL with values interpolated (for logging/debugging only)
+raw = User.where('active', True).where('score', '>', 50).to_raw_sql()
+print(raw)
+# SELECT * FROM "users" WHERE "active" = 1 AND "score" > 50
 ```
 
 ---
@@ -517,27 +631,16 @@ users = await User.join('posts', lambda join: (
 
 ```python
 class User(Model):
-    __table__ = 'users'
-    
-    id: Optional[int] = None
-    name: str
-    
     def phone(self):
         return self.has_one(Phone)
 
 class Phone(Model):
-    __table__ = 'phones'
-    
-    id: Optional[int] = None
-    user_id: int
-    number: str
-    
     def user(self):
         return self.belongs_to(User)
 
 # Usage
-phone = await user.phone().get()
-owner = await phone.user().get()
+phone = await user.phone().get_results()
+owner = await phone.user().get_results()
 ```
 
 ### One to Many
@@ -548,18 +651,22 @@ class User(Model):
         return self.has_many(Post)
 
 class Post(Model):
-    def user(self):
+    def author(self):
         return self.belongs_to(User)
 
-# Usage
-posts = await user.posts().get()
-user = await post.user().get()
+posts  = await user.posts().get()
+author = await post.author().get_results()
 
 # Create through relation
-post = await user.posts().create({
-    'title': 'New Post',
-    'content': 'Content here'
-})
+post = await user.posts().create({'title': 'Hello World', 'content': '...'})
+```
+
+### Belongs To
+
+```python
+class Post(Model):
+    def user(self):
+        return self.belongs_to(User, foreign_key='author_id')
 ```
 
 ### Many to Many
@@ -567,30 +674,53 @@ post = await user.posts().create({
 ```python
 class User(Model):
     def roles(self):
-        return self.belongs_to_many(Role)
+        return self.belongs_to_many(Role)   # pivot table: role_user
 
 class Role(Model):
     def users(self):
         return self.belongs_to_many(User)
 
-# Usage
-roles = await user.roles().get()
-users = await role.users().get()
-
-# Attach / Detach
+# Attach / detach
 await user.roles().attach(role_id)
+await user.roles().attach(role_id, {'expires_at': some_date})
 await user.roles().detach(role_id)
-await user.roles().sync([1, 2, 3])  # Replace all
+await user.roles().sync([1, 2, 3])   # replace all
 
-# With pivot data
-await user.roles().attach(role_id, {
-    'expires_at': datetime.now() + timedelta(days=30)
-})
+# Toggle
+await user.roles().toggle([1, 2])
 
-# Access pivot data
+# With pivot columns
 roles = await user.roles().with_pivot('expires_at').get()
 for role in roles:
     print(role.pivot.expires_at)
+```
+
+### Has One Through
+
+A one-to-one relation through an intermediate model.
+
+```python
+# Country → User → Profile  (country has one profile through user)
+class Country(Model):
+    def latest_profile(self):
+        return self.has_one_through(Profile, User)
+        # has_one_through(related, through, first_key=None, second_key=None,
+        #                 local_key=None, second_local_key=None)
+
+profile = await country.latest_profile().get_results()
+```
+
+### Has Many Through
+
+A one-to-many relation through an intermediate model.
+
+```python
+# Country → User → Post  (country has many posts through users)
+class Country(Model):
+    def posts(self):
+        return self.has_many_through(Post, User)
+
+posts = await country.posts().get()
 ```
 
 ### Polymorphic Relationships
@@ -598,7 +728,7 @@ for role in roles:
 ```python
 class Comment(Model):
     def commentable(self):
-        return self.morph_to('commentable')
+        return self.morph_to('commentable')   # morph_to(name)
 
 class Post(Model):
     def comments(self):
@@ -608,124 +738,220 @@ class Video(Model):
     def comments(self):
         return self.morph_many(Comment, 'commentable')
 
-# Usage
-# Comments table needs: id, body, commentable_type, commentable_id
-
-# Get comments for a post
+# Usage — comments table needs: id, body, commentable_type, commentable_id
 comments = await post.comments().get()
+parent   = await comment.commentable().get_results()   # Post or Video instance
+```
 
-# Get parent of a comment
-parent = await comment.commentable().get()  # Returns Post or Video
+### Polymorphic Many-to-Many
+
+Tags shared across multiple model types.
+
+```python
+# taggables pivot table: tag_id, taggable_id, taggable_type
+
+class Post(Model):
+    def tags(self):
+        return self.morph_to_many(Tag, 'taggable')
+
+class Video(Model):
+    def tags(self):
+        return self.morph_to_many(Tag, 'taggable')
+
+class Tag(Model):
+    def posts(self):
+        return self.morphed_by_many(Post, 'taggable')
+
+    def videos(self):
+        return self.morphed_by_many(Video, 'taggable')
+
+# Attach tags to a post
+await post.tags().attach([tag1.id, tag2.id])
+
+# Sync (replaces existing)
+await post.tags().sync([tag2.id, tag3.id])
+
+# Detach
+await post.tags().detach([tag1.id])
+
+# Query
+tags   = await post.tags().get()
+posts  = await tag.posts().get()
+videos = await tag.videos().get()
 ```
 
 ### Querying Relations
 
 ```python
-# Has
-users_with_posts = await User.has('posts').get()
-users_with_many_posts = await User.has('posts', '>=', 5).get()
+# Has (existence check)
+users = await User.has('posts').get()
+users = await User.has('posts', '>=', 3).get()
 
-# Doesnt Have
-users_without_posts = await User.doesnt_have('posts').get()
+# Doesnt have
+users = await User.doesnt_have('posts').get()
 
-# Where Has
-users = await User.where_has('posts', lambda q: (
-    q.where('published', True)
-)).get()
+# Where has (with constraints)
+users = await User.where_has('posts', lambda q: q.where('published', True)).get()
 
-# With Count
+# With count
 users = await User.with_count('posts').get()
-for user in users:
-    print(f"{user.name} has {user.posts_count} posts")
+for u in users:
+    print(u.posts_count)
 
-# Load relations (eager loading)
+# Eager loading
 users = await User.with_('posts', 'profile').get()
+users = await User.with_({'posts': lambda q: q.where('published', True)}).get()
 
-# Lazy eager loading
-user = await User.find(1)
+# Lazy load on an already-retrieved model
 await user.load('posts', 'comments')
+await user.load_missing('profile')   # only if not already loaded
 ```
 
 ---
 
 ## Collections
 
-Collections extend Python lists with powerful methods:
+All query results are returned as `Collection` instances, which wrap a list with 60+ methods.
+
+### Presence
 
 ```python
-users = await User.all()
+col.is_empty()
+col.is_not_empty()
+col.contains('name', 'Alice')          # attribute match
+col.contains(lambda u: u.age > 18)    # predicate
+col.doesnt_contain('status', 'banned')
+col.first_where('age', '>=', 18)
+col.sole()                             # raises if count != 1
+```
 
-# Checking
-users.is_empty()
-users.is_not_empty()
-users.contains(lambda u: u.id == 1)
+### Filtering & Slicing
 
-# Filtering
-adults = users.where('age', '>=', 18)
-active = users.filter(lambda u: u.active)
+```python
+col.filter(lambda u: u.active)
+col.where('active', True)
+col.where_not_in('status', ['banned'])
+col.take(10)
+col.skip(20)
+col.take_while(lambda u: u.score > 0)
+col.skip_while(lambda u: u.score > 100)
+col.only('id', 'name', 'email')        # keep only these keys in each item dict
+col.except_('password')
+```
 
-# Transformation
-names = users.pluck('name')
-upper_names = users.map(lambda u: u.name.upper())
-keyed = users.key_by('id')  # Dict by key
+### Sorting
 
-# Sorting
-sorted_users = users.sort_by('name')
-sorted_desc = users.sort_by_desc('created_at')
+```python
+col.sort_by('name')
+col.sort_by_desc('created_at')
+col.sort_by(lambda u: (u.last_name, u.first_name))
+```
 
-# Aggregates
-total_age = users.sum('age')
-avg_age = users.avg('age')
-max_age = users.max('age')
+### Set Operations
 
-# Slicing
-first_10 = users.take(10)
-except_first = users.skip(1)
-page_2 = users.for_page(2, 15)
+```python
+col.diff(other)         # items in col not in other
+col.intersect(other)    # items in both
+col.unique('email')     # deduplicate by attribute
+col.duplicates('email') # items with duplicate attribute values
+```
 
-# Iteration
-users.each(lambda u: print(u.name))
+### Merging & Combining
 
-# Unique
-unique_countries = users.unique('country')
+```python
+col.merge(other)        # concatenate two collections
+col.concat(other)       # alias
+col.zip(other)          # pair items: [(a1,b1), (a2,b2), ...]
+col.collapse()          # flatten one level (collection of collections)
+col.flatten()           # fully flatten nested structure
+```
+
+### Grouping & Splitting
+
+```python
+groups = col.group_by('country')       # dict[key, Collection]
+active, inactive = col.partition(lambda u: u.active)
+chunks = col.split(3)                  # list of 3 equal-ish Collections
+removed = col.splice(start, delete_count, replacements)
+```
+
+### Transformations
+
+```python
+col.map(lambda u: u.name.upper())
+col.flat_map(lambda u: u.roles)
+col.map_with_keys(lambda u: (u.id, u.name))   # → dict
+col.map_into(UserDTO)                         # instantiate another class
+col.key_by('id')                              # → dict keyed by attribute
+col.pluck('name')
+col.pluck('name', 'id')                       # → dict id→name
+```
+
+### Statistics & Reduction
+
+```python
+col.count()
+col.sum('score')
+col.avg('age')
+col.min('age')
+col.max('age')
+col.median()          # or col.median('age')
+col.mode()            # or col.mode('status')
+col.count_by(lambda u: u.country)   # frequency dict
+col.reduce(lambda carry, u: carry + u.score, 0)
+```
+
+### Pipelines
+
+```python
+result  = col.pipe(lambda c: c.filter(...).sort_by('name'))
+col.tap(lambda c: logger.debug(f'{c.count()} items'))
+filtered = col.when(flag, lambda c: c.filter(pred))
+filtered = col.unless(flag, lambda c: c.filter(pred))
+```
+
+### Mutation
+
+```python
+col.push(item)
+col.prepend(item)
+col.pop()            # remove and return last
+col.shift()          # remove and return first
+col.forget(2)        # remove index
+col.shuffle()        # in-place random shuffle, returns self
+col.random()         # single random item
+col.random(3)        # Collection of 3 random items
+col.pad(10, default) # pad to minimum length
+```
+
+### Serialisation
+
+```python
+col.to_array()   # list of dicts
+col.to_json()    # JSON string
+col.all()        # raw list
 ```
 
 ---
 
 ## Mutators & Casting
 
-### Attribute Casting
-
 ```python
-from datetime import datetime
 from decimal import Decimal
 from pyloquent import Model
 
 class User(Model):
     __casts__ = {
-        'age': 'int',
-        'balance': 'decimal:2',
-        'is_active': 'bool',
-        'metadata': 'json',
+        'age':        'int',
+        'balance':    'decimal:2',
+        'is_active':  'bool',
+        'metadata':   'json',
         'birth_date': 'date',
         'last_login': 'datetime',
     }
-    
-    id: Optional[int] = None
-    age: int = 0
-    balance: Decimal = Decimal('0.00')
-    is_active: bool = True
-    metadata: dict = {}
-    birth_date: Optional[date] = None
-    last_login: Optional[datetime] = None
 ```
 
-Available cast types:
-- `int`, `float`, `bool`, `string`
-- `json` - Automatically JSON encode/decode
-- `date` - Date object
-- `datetime` - Datetime object
-- `decimal:X` - Decimal with X precision
+Available cast types: `int`, `float`, `bool`, `string`, `json`, `date`, `datetime`, `decimal:N`
 
 ---
 
@@ -737,11 +963,11 @@ Available cast types:
 class Post(Model):
     def scope_published(self, query):
         return query.where('status', 'published')
-    
+
     def scope_recent(self, query):
         return query.order_by('created_at', 'desc')
 
-# Usage
+# Chainable
 posts = await Post.published().recent().get()
 ```
 
@@ -754,10 +980,10 @@ class Post(Model):
         super().boot()
         cls.add_global_scope('active', lambda q: q.where('active', True))
 
-# Now all queries include WHERE active = True
-posts = await Post.all()  # Only active posts
+# All queries automatically include WHERE active = 1
+posts = await Post.all()
 
-# Remove scope
+# Remove for a single query
 posts = await Post.without_global_scope('active').get()
 ```
 
@@ -765,45 +991,63 @@ posts = await Post.without_global_scope('active').get()
 
 ## Events & Observers
 
-### Model Events
+### Available Events
+
+| Event | Fired when |
+|-------|-----------|
+| `retrieved` | Model is loaded from the database |
+| `creating` | Before inserting a new record |
+| `created` | After inserting a new record |
+| `updating` | Before updating an existing record |
+| `updated` | After updating an existing record |
+| `saving` | Before creating or updating |
+| `saved` | After creating or updating |
+| `deleting` | Before deleting (soft or hard) |
+| `deleted` | After deleting |
+| `restoring` | Before restoring a soft-deleted record |
+| `restored` | After restoring a soft-deleted record |
+
+**Returning `False` from `creating`, `updating`, `saving`, `deleting`, or `restoring` aborts the operation.**
 
 ```python
 class User(Model):
     @classmethod
     def boot(cls):
         super().boot()
-        
-        cls.on('creating', lambda user: print(f"Creating {user.name}"))
-        cls.on('created', lambda user: print(f"Created {user.name}"))
-        cls.on('updating', lambda user: print(f"Updating {user.name}"))
-        cls.on('updated', lambda user: print(f"Updated {user.name}"))
-        cls.on('deleting', lambda user: print(f"Deleting {user.name}"))
-        cls.on('deleted', lambda user: print(f"Deleted {user.name}"))
-        cls.on('saving', lambda user: print(f"Saving {user.name}"))
-        cls.on('saved', lambda user: print(f"Saved {user.name}"))
+
+        cls.on('retrieved', lambda u: audit_log('read', u.id))
+        cls.on('creating',  lambda u: setattr(u, 'slug', slugify(u.name)))
+        cls.on('created',   lambda u: send_welcome_email(u))
+        cls.on('updating',  lambda u: False if u.is_locked else None)
+        cls.on('deleting',  lambda u: False if u.is_admin else None)
+        cls.on('restoring', lambda u: log(f'restoring {u.id}'))
+```
+
+Register a listener anywhere:
+
+```python
+User.on('created', lambda user: print(f"New user: {user.name}"))
 ```
 
 ### Observers
 
 ```python
-from pyloquent import ModelObserver, observes
+from pyloquent import ModelObserver
 
-@observes(User)
 class UserObserver(ModelObserver):
     async def creating(self, user):
         user.slug = slugify(user.name)
-    
-    async function created(self, user):
+
+    async def created(self, user):
         await send_welcome_email(user)
-    
-    async function updating(self, user):
+
+    async def updating(self, user):
         if user.is_dirty('email'):
             user.email_verified_at = None
-    
-    async function deleted(self, user):
+
+    async def deleted(self, user):
         await cleanup_user_data(user)
 
-# Register observer
 User.observe(UserObserver())
 ```
 
@@ -811,44 +1055,25 @@ User.observe(UserObserver())
 
 ## Query Caching
 
-### Basic Caching
-
 ```python
-from pyloquent import CacheManager, MemoryStore
+from pyloquent import CacheManager, MemoryStore, FileStore, RedisStore
 
-# Setup cache
+# Choose a store
 CacheManager.store(MemoryStore())
+CacheManager.store(FileStore('/var/cache/app'))
+CacheManager.store(RedisStore(host='localhost', port=6379, db=0))
 
-# Cache for 1 hour
+# Cache a query for N seconds
 users = await User.cache(3600).get()
 
 # Cache forever
 users = await User.cache_forever().get()
 
-# Custom cache key
-users = await User.cache(3600, 'active_users').get()
+# Custom key
+users = await User.cache(3600, 'active_users').where('active', True).get()
 
-# Cache with tags
+# Cache with tags (Redis / tagged stores only)
 users = await User.cache(3600).cache_tags('users', 'active').get()
-```
-
-### Cache Stores
-
-```python
-from pyloquent import CacheManager, FileStore, RedisStore
-
-# File-based cache
-CacheManager.store(FileStore('/path/to/cache'))
-
-# Redis cache
-CacheManager.store(RedisStore(
-    host='localhost',
-    port=6379,
-    db=0
-))
-
-# Memory cache (default)
-CacheManager.store(MemoryStore())
 ```
 
 ---
@@ -858,10 +1083,7 @@ CacheManager.store(MemoryStore())
 ### Creating Migrations
 
 ```bash
-# Create a migration
 pyloquent make:migration create_users_table
-
-# Create a table migration
 pyloquent make:migration create_posts_table --table=posts --create
 ```
 
@@ -877,11 +1099,11 @@ class CreateUsersTable(Migration):
             table.id(),
             table.string('name'),
             table.string('email').unique(),
-            table.timestamp('email_verified_at').nullable(),
             table.string('password'),
-            table.timestamps()  # created_at, updated_at
+            table.timestamp('email_verified_at').nullable(),
+            table.timestamps(),
         ))
-    
+
     async def down(self, schema: SchemaBuilder) -> None:
         await schema.drop('users')
 ```
@@ -890,47 +1112,39 @@ class CreateUsersTable(Migration):
 
 ```python
 # IDs
-table.id()  # Auto-increment primary key
-table.uuid('id')  # UUID primary key
+table.id()               # SERIAL / INTEGER AUTO_INCREMENT PRIMARY KEY
+table.uuid('id')
 
 # Strings
 table.string('name', 255)
-table.text('description')
-table.char('country_code', 2)
+table.text('bio')
+table.char('code', 2)
 
 # Numbers
 table.integer('age')
 table.big_integer('views')
-table.small_integer('priority')
-table.tiny_integer('status')
 table.float('rating', 8, 2)
-table.double('amount', 15, 8)
 table.decimal('price', 10, 2)
 
 # Boolean
 table.boolean('is_active')
 
-# Dates
+# Dates / Times
 table.date('birth_date')
 table.datetime('last_login')
-table.time('opens_at')
 table.timestamp('created_at')
-table.timestamps()  # created_at + updated_at
+table.timestamps()          # created_at + updated_at
 
 # JSON
 table.json('metadata')
-table.jsonb('settings')  # PostgreSQL
 
-# Special
+# Enums
 table.enum('status', ['pending', 'active', 'inactive'])
-table.uuid('uuid')
-table.ip_address('last_ip')
-table.mac_address('device_mac')
 
 # Modifiers
 table.string('email').unique()
 table.integer('user_id').index()
-table.string('name').nullable()
+table.string('bio').nullable()
 table.string('avatar').default('default.png')
 table.integer('views').unsigned()
 
@@ -941,23 +1155,12 @@ table.foreign('user_id').references('id').on('users').on_delete('cascade')
 ### Running Migrations
 
 ```bash
-# Run all pending migrations
-pyloquent migrate
-
-# Rollback last batch
-pyloquent migrate:rollback
-
-# Rollback specific number
+pyloquent migrate                   # run all pending
+pyloquent migrate:rollback          # rollback last batch
 pyloquent migrate:rollback --steps=3
-
-# Reset all migrations
-pyloquent migrate:reset
-
-# Fresh (drop all and re-run)
-pyloquent migrate:fresh
-
-# Check status
-pyloquent migrate:status
+pyloquent migrate:reset             # rollback everything
+pyloquent migrate:fresh             # drop all + re-run
+pyloquent migrate:status            # show status table
 ```
 
 ---
@@ -972,29 +1175,28 @@ import random
 
 class UserFactory(Factory[User]):
     model = User
-    
+
     def definition(self):
         return {
-            'name': self.faker.name(),
-            'email': self.faker.email(),
-            'age': random.randint(18, 65),
+            'name':      self.faker.name(),
+            'email':     self.faker.unique.email(),
+            'age':       random.randint(18, 65),
             'is_active': True,
         }
 
-# Factory with states
 class PostFactory(Factory[Post]):
     model = Post
-    
+
     def definition(self):
         return {
-            'title': self.faker.sentence(),
+            'title':   self.faker.sentence(),
             'content': self.faker.paragraph(),
-            'published': True,
+            'status':  'published',
         }
-    
-    def unpublished(self):
-        return self.state({'published': False})
-    
+
+    def draft(self):
+        return self.state({'status': 'draft'})
+
     def featured(self):
         return self.state({'is_featured': True})
 ```
@@ -1002,92 +1204,39 @@ class PostFactory(Factory[Post]):
 ### Using Factories
 
 ```python
-# Create a user
-user = await UserFactory.create()
-
-# Create with overrides
-user = await UserFactory.create({'name': 'John Doe'})
-
-# Create many
+user  = await UserFactory.create()
+user  = await UserFactory.create({'name': 'Alice'})
 users = await UserFactory.create_many(10)
+
+# States
+post     = await PostFactory.draft().create()
+featured = await PostFactory.featured().create_many(5)
 
 # Make (don't save)
 user = UserFactory.make()
-
-# States
-post = await PostFactory.unpublished().create()
-featured = await PostFactory.featured().create_many(5)
-
-# Batch create
-users = await UserFactory.create_batch(50)
 ```
 
 ---
 
 ## Cloudflare D1
 
-### Using D1 with HTTP API
-
 ```python
-from pyloquent import ConnectionManager
-
-manager = ConnectionManager()
+# HTTP API
 manager.add_connection('d1', {
-    'driver': 'd1',
-    'api_token': 'your-cloudflare-api-token',
-    'account_id': 'your-account-id',
+    'driver':      'd1',
+    'api_token':   'your-cloudflare-api-token',
+    'account_id':  'your-account-id',
     'database_id': 'your-database-id',
 }, default=True)
 
-await manager.connect()
-
-# Use normally
-users = await User.all()
-```
-
-### Using D1 with Worker Bindings
-
-```python
-# In your Cloudflare Worker
-from pyloquent import ConnectionManager
-
-manager = ConnectionManager()
+# Worker binding (edge runtime)
 manager.add_connection('d1', {
-    'driver': 'd1',
-    'binding': env.DB,  # D1 binding from Worker environment
-}, default=True)
+    'driver':  'd1',
+    'binding': env.DB,   # D1 binding from Worker environment
+})
 
 await manager.connect()
-```
-
-### D1 HTTP Client (Direct)
-
-```python
-from pyloquent import D1HttpClient
-
-client = D1HttpClient(
-    account_id='your-account-id',
-    database_id='your-database-id',
-    api_token='your-api-token'
-)
-
-# Query
-results = await client.query(
-    'SELECT * FROM users WHERE id = ?',
-    [1]
-)
-
-# Execute
-await client.execute(
-    'INSERT INTO users (name, email) VALUES (?, ?)',
-    ['John', 'john@example.com']
-)
-
-# Batch
-await client.batch([
-    {'sql': 'INSERT INTO users (name) VALUES (?)', 'params': ['John']},
-    {'sql': 'INSERT INTO users (name) VALUES (?)', 'params': ['Jane']},
-])
+users = await User.all()   # works identically to any other driver
 ```
 
 ---
@@ -1096,53 +1245,51 @@ await client.batch([
 
 ```python
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from pyloquent import ConnectionManager
+from fastapi import FastAPI, HTTPException
+from pyloquent import ConnectionManager, Model
+from pyloquent.database.manager import set_manager
+from pyloquent.exceptions import ModelNotFoundException
 
 manager = ConnectionManager()
 manager.add_connection('default', {
-    'driver': 'sqlite',
+    'driver':   'sqlite',
     'database': 'app.db',
 }, default=True)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    set_manager(manager)
     await manager.connect()
     yield
-    # Shutdown
     await manager.disconnect()
 
 app = FastAPI(lifespan=lifespan)
 
 @app.get('/users')
-async def get_users():
-    users = await User.all()
-    return {'data': users}
+async def list_users(page: int = 1, per_page: int = 20):
+    return await User.paginate(per_page=per_page, page=page)
 
 @app.get('/users/{id}')
 async def get_user(id: int):
-    user = await User.find_or_fail(id)
-    return {'data': user}
+    try:
+        return await User.find_or_fail(id)
+    except ModelNotFoundException:
+        raise HTTPException(status_code=404, detail='User not found')
 
 @app.post('/users')
-async function create_user(data: dict):
-    user = await User.create(data)
-    return {'data': user}
+async def create_user(data: dict):
+    return await User.create(data)
 
 @app.put('/users/{id}')
 async def update_user(id: int, data: dict):
     user = await User.find_or_fail(id)
-    for key, value in data.items():
-        setattr(user, key, value)
-    await user.save()
-    return {'data': user}
+    return await user.update(data)
 
 @app.delete('/users/{id}')
-async function delete_user(id: int):
+async def delete_user(id: int):
     user = await User.find_or_fail(id)
     await user.delete()
-    return {'message': 'User deleted'}
+    return {'message': 'Deleted'}
 ```
 
 ---
@@ -1152,50 +1299,28 @@ async function delete_user(id: int):
 ### Raw Queries
 
 ```python
-# Select
-results = await User.query.select_raw('COUNT(*) as count').get()
-
-# Where raw
-users = await User.where_raw('age > ? AND status = ?', [18, 'active']).get()
-
-# Order by raw
-users = await User.order_by_raw('RANDOM()').get()
-```
-
-### Subqueries
-
-```python
-# Where exists
-users = await User.where_exists(
-    Post.where_column('posts.user_id', 'users.id')
-        .where('published', True)
-).get()
-
-# Subquery select
-users = await User.add_select([
-    'name',
-    Post.where_column('user_id', 'users.id')
-        .count()
-        .as_('posts_count')
-]).get()
+results = await User.query.select_raw('COUNT(*) as count, status').group_by('status').get()
+users   = await User.where_raw('age > ? AND status = ?', [18, 'active']).get()
+users   = await User.order_by_raw('RANDOM()').limit(5).get()
 ```
 
 ### Database Transactions
 
 ```python
-# Manual transaction
-await manager.connection().begin_transaction()
+# Context manager (recommended)
+async with manager.transaction():
+    user = await User.create({'name': 'John'})
+    await Post.create({'user_id': user.id, 'title': 'Hello'})
+
+# Manual control
+conn = manager.connection()
+await conn.begin_transaction()
 try:
     await User.create({'name': 'John'})
-    await Post.create({'title': 'Hello'})
-    await manager.connection().commit()
+    await conn.commit()
 except Exception:
-    await manager.connection().rollback()
-
-# Context manager (if supported by driver)
-async with manager.connection().transaction():
-    await User.create({'name': 'John'})
-    await Post.create({'title': 'Hello'})
+    await conn.rollback()
+    raise
 ```
 
 ---

@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
 from pyloquent.orm.collection import Collection
 from pyloquent.orm.relations.relation import Relation, T
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from pyloquent.orm.model import Model
 
 
@@ -115,7 +115,7 @@ class BelongsToMany(Relation[T]):
         parent_value = getattr(self.parent, self.parent_key)
 
         # Build query
-        query = self.related.query()
+        query = self.related.query
 
         # Join pivot table
         query = query.join(
@@ -135,16 +135,16 @@ class BelongsToMany(Relation[T]):
             )
 
         # Select related model columns
-        query = query.select(f"{self.related.__table__}.*")
+        query = query.select_raw(f"{self.related.__table__}.*")
 
         # Select pivot columns
         if self._pivot_columns:
             for col in self._pivot_columns:
-                query = query.add_select(f"{self.table}.{col} as pivot_{col}")
+                query = query.select_raw(f"{self.table}.{col} as pivot_{col}")
         else:
-            query = query.add_select(
-                f"{self.table}.{self.foreign_pivot_key} as pivot_{self.foreign_pivot_key}",
-                f"{self.table}.{self.related_pivot_key} as pivot_{self.related_pivot_key}",
+            query = query.select_raw(
+                f"{self.table}.{self.foreign_pivot_key} as pivot_{self.foreign_pivot_key},"
+                f" {self.table}.{self.related_pivot_key} as pivot_{self.related_pivot_key}"
             )
 
         return query
@@ -328,8 +328,8 @@ class BelongsToMany(Relation[T]):
         """
         from pyloquent.query.builder import QueryBuilder
 
-        # Get connection from parent
-        query = QueryBuilder(self.parent._new_query().grammar)
+        parent_query = self.parent._new_query()
+        query = QueryBuilder(parent_query.grammar, connection=parent_query.connection)
         query = query.from_(self.table)
         query = query.where(self.foreign_pivot_key, getattr(self.parent, self.parent_key))
 

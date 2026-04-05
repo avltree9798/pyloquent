@@ -14,12 +14,27 @@ from pyloquent.factories import Factory
 from pyloquent.migrations import Migration, MigrationCreator, MigrationRunner
 from pyloquent.observers import EventDispatcher, ModelObserver, observes
 from pyloquent.orm import Collection, Model
+from pyloquent.orm.relations import (
+    BelongsTo,
+    BelongsToMany,
+    HasMany,
+    HasManyThrough,
+    HasOne,
+    HasOneThrough,
+    MorphMany,
+    MorphOne,
+    MorphTo,
+    MorphToMany,
+    MorphedByMany,
+)
 from pyloquent.query import QueryBuilder
 from pyloquent.schema import Blueprint, SchemaBuilder
 from pyloquent.traits import SoftDeletes
 
 __all__ = [
     "__version__",
+    "BelongsTo",
+    "BelongsToMany",
     "Blueprint",
     "CacheManager",
     "Collection",
@@ -29,6 +44,10 @@ __all__ = [
     "EventDispatcher",
     "Factory",
     "FileStore",
+    "HasMany",
+    "HasManyThrough",
+    "HasOne",
+    "HasOneThrough",
     "MemoryStore",
     "Migration",
     "MigrationCreator",
@@ -36,6 +55,11 @@ __all__ = [
     "Model",
     "ModelNotFoundException",
     "ModelObserver",
+    "MorphMany",
+    "MorphOne",
+    "MorphTo",
+    "MorphToMany",
+    "MorphedByMany",
     "PyloquentException",
     "QueryBuilder",
     "QueryException",

@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Optional, Type
 
 from pyloquent.orm.relations.relation import Relation, T
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from pyloquent.orm.model import Model
 
 
@@ -86,11 +86,19 @@ class MorphTo(Relation[T]):
         except (ImportError, AttributeError):
             return None
 
+    def _create_query(self) -> "QueryBuilder[T]":
+        """Create query for the resolved related model class."""
+        if self._related_class:
+            return self._related_class.query
+        from pyloquent.query.builder import QueryBuilder
+        from pyloquent.grammars.sqlite_grammar import SQLiteGrammar
+        return QueryBuilder(SQLiteGrammar())
+
     def add_constraints(self) -> None:
         """Add constraints to the query."""
         if self._related_class:
             id_value = getattr(self.parent, self.id_column)
-            self._query = self._related_class.query().where(self.owner_key, id_value)
+            self._query = self._query.where(self.owner_key, id_value)
 
     async def get_results(self) -> Optional[T]:
         """Get the related model.

@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Pydantic integration for validation
   - CRUD operations (Create, Read, Update, Delete)
   - Mass assignment protection (fillable/guarded)
-  - Hidden attributes for serialization
+  - Hidden attributes for serialisation
   - Dirty tracking
   - Model metadata via metaclass
 - Collection class

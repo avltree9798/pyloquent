@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, List, Tuple
 
 from pyloquent.grammars.grammar import Grammar
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from pyloquent.query.builder import QueryBuilder
 
 
@@ -49,7 +49,7 @@ class MySQLGrammar(Grammar):
         MySQL uses %s for parameters with aiomysql.
 
         Args:
-            value: The value to parameterize
+            value: The value to parameterise
 
         Returns:
             Parameter placeholder string

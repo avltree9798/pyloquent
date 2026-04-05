@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, List, Tuple
 
 from pyloquent.grammars.grammar import Grammar
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from pyloquent.query.builder import QueryBuilder
 
 
@@ -94,7 +94,7 @@ class PostgresGrammar(Grammar):
         For simplicity, we use positional parameters and let asyncpg handle it.
 
         Args:
-            value: The value to parameterize
+            value: The value to parameterise
 
         Returns:
             Parameter placeholder string

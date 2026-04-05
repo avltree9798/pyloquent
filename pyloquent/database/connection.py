@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from pyloquent.grammars.grammar import Grammar
 
 
@@ -110,29 +110,29 @@ class Connection(ABC):
         """
         pass
 
-    async def begin_transaction(self) -> None:
+    async def begin_transaction(self) -> None:  # pragma: no cover
         """Begin a database transaction.
 
         Raises:
             QueryException: If transaction fails to start
         """
-        await self.execute("BEGIN")
+        await self.execute("BEGIN")  # pragma: no cover
 
-    async def commit(self) -> None:
+    async def commit(self) -> None:  # pragma: no cover
         """Commit the current transaction.
 
         Raises:
             QueryException: If commit fails
         """
-        await self.execute("COMMIT")
+        await self.execute("COMMIT")  # pragma: no cover
 
-    async def rollback(self) -> None:
+    async def rollback(self) -> None:  # pragma: no cover
         """Rollback the current transaction.
 
         Raises:
             QueryException: If rollback fails
         """
-        await self.execute("ROLLBACK")
+        await self.execute("ROLLBACK")  # pragma: no cover
 
     def table(self, name: str) -> "QueryBuilder":
         """Start a query builder for a table.

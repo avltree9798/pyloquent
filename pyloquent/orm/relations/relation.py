@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Generic, Optional, Type, TypeVar
 
 from pyloquent.query.builder import QueryBuilder
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from pyloquent.orm.collection import Collection
     from pyloquent.orm.model import Model
 

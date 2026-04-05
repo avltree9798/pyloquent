@@ -73,3 +73,92 @@ async def setup_tables(sqlite_db):
     yield
 
     # Cleanup happens automatically with :memory: database
+
+
+@pytest_asyncio.fixture
+async def setup_extended_tables(sqlite_db):
+    """Create extended test tables for advanced integration tests."""
+    conn = sqlite_db.connection()
+
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            age INTEGER,
+            score INTEGER DEFAULT 0,
+            is_active BOOLEAN DEFAULT 1,
+            deleted_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """
+    )
+
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS posts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            content TEXT,
+            views INTEGER DEFAULT 0,
+            is_published BOOLEAN DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    """
+    )
+
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER UNIQUE NOT NULL,
+            bio TEXT,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    """
+    )
+
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS countries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL
+        )
+    """
+    )
+
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS phone_numbers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            number TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    """
+    )
+
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL
+        )
+    """
+    )
+
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS taggables (
+            tag_id INTEGER NOT NULL,
+            taggable_id INTEGER NOT NULL,
+            taggable_type TEXT NOT NULL
+        )
+    """
+    )
+
+    yield

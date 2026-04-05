@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, List, Tuple
 
 from pyloquent.grammars.grammar import Grammar
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from pyloquent.query.builder import QueryBuilder
 
 
@@ -46,9 +46,35 @@ class SQLiteGrammar(Grammar):
         SQLite uses ? for parameters.
 
         Args:
-            value: The value to parameterize
+            value: The value to parameterise
 
         Returns:
             Parameter placeholder string
         """
         return "?"
+
+    def _compile_lock(self, query: "QueryBuilder") -> str:
+        """SQLite does not support row locking — return empty string."""
+        return ""
+
+    def compile_upsert(
+        self,
+        query: "QueryBuilder",
+        values: List[dict],
+        unique_by: List[str],
+        update_columns: List[str],
+    ) -> Tuple[str, List[Any]]:
+        """SQLite upsert using INSERT OR REPLACE ... ON CONFLICT DO UPDATE.
+
+        SQLite 3.24+ supports the standard ON CONFLICT syntax.
+        """
+        from pyloquent.grammars.grammar import Grammar
+        return Grammar.compile_upsert(self, query, values, unique_by, update_columns)
+
+    def compile_insert_or_ignore(
+        self, query: "QueryBuilder", values: List[dict]
+    ) -> Tuple[str, List[Any]]:
+        """SQLite uses INSERT OR IGNORE INTO syntax."""
+        sql, bindings = self.compile_insert(query, values)
+        sql = sql.replace("INSERT INTO", "INSERT OR IGNORE INTO", 1)
+        return sql, bindings

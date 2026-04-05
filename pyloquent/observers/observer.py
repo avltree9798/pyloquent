@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING, Any, Callable, Type
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from pyloquent.orm.model import Model
 
 

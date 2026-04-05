@@ -60,10 +60,16 @@ class Model(BaseModel, metaclass=ModelMeta):
     __fillable__: ClassVar[List[str]] = []
     __guarded__: ClassVar[List[str]] = ["id"]
     __hidden__: ClassVar[List[str]] = []
+    __visible__: ClassVar[List[str]] = []
+    __appends__: ClassVar[List[str]] = []
     __casts__: ClassVar[Dict[str, str]] = {}
     __timestamps__: ClassVar[bool] = True
     __connection__: ClassVar[Optional[str]] = None
     __primary_key__: ClassVar[str] = "id"
+    __incrementing__: ClassVar[bool] = True
+    __key_type__: ClassVar[str] = "int"
+    __with__: ClassVar[List[str]] = []
+    __per_page__: ClassVar[int] = 15
 
     # Event dispatcher reference (class-level)
     _dispatcher: ClassVar[Optional[Any]] = None
@@ -75,6 +81,10 @@ class Model(BaseModel, metaclass=ModelMeta):
     _exists: bool = PrivateAttr(default=False)
     _original: Dict[str, Any] = PrivateAttr(default_factory=dict)
     _relations: Dict[str, Any] = PrivateAttr(default_factory=dict)
+    _instance_hidden: Optional[List[str]] = PrivateAttr(default=None)
+    _instance_visible: List[str] = PrivateAttr(default_factory=list)
+    _appended: List[str] = PrivateAttr(default_factory=list)
+    _changes: Dict[str, Any] = PrivateAttr(default_factory=dict)
 
     # ========================================================================
     # Pydantic Configuration
@@ -133,9 +143,9 @@ class Model(BaseModel, metaclass=ModelMeta):
             from datetime import datetime
 
             now = datetime.now()
-            if "created_at" in self.model_fields:
+            if "created_at" in self.__class__.model_fields:
                 attributes["created_at"] = now
-            if "updated_at" in self.model_fields:
+            if "updated_at" in self.__class__.model_fields:
                 attributes["updated_at"] = now
 
         # Insert and get ID
@@ -143,7 +153,7 @@ class Model(BaseModel, metaclass=ModelMeta):
         id = await query.insert_get_id(attributes)
 
         # Set ID on model
-        if id is not None and self.__primary_key__ in self.model_fields:
+        if id is not None and self.__primary_key__ in self.__class__.model_fields:
             setattr(self, self.__primary_key__, id)
 
         # Mark as existing and set original
@@ -176,12 +186,15 @@ class Model(BaseModel, metaclass=ModelMeta):
         if self.__timestamps__:
             from datetime import datetime
 
-            if "updated_at" in self.model_fields:
+            if "updated_at" in self.__class__.model_fields:
                 dirty["updated_at"] = datetime.now()
 
         # Update
         query = self._new_query().where(self.__primary_key__, self._get_key())
         await query.update(dirty)
+
+        # Track changes
+        self._changes = dirty.copy()
 
         # Update original
         self._original.update(dirty)
@@ -194,11 +207,18 @@ class Model(BaseModel, metaclass=ModelMeta):
     async def delete(self: T) -> bool:
         """Delete the model from the database.
 
+        If the model uses SoftDeletes, this performs a soft delete instead.
+
         Returns:
             True on success
         """
         if not self._exists:
             return False
+
+        # Delegate to SoftDeletes if the trait is in use
+        if getattr(self.__class__, "__soft_deletes__", False):
+            from pyloquent.traits.soft_deletes import SoftDeletes
+            return await SoftDeletes.delete(self)
 
         # Fire deleting event (abort if returns False)
         if await self._fire_event("deleting") is False:
@@ -237,7 +257,7 @@ class Model(BaseModel, metaclass=ModelMeta):
             raise ModelNotFoundException(self.__class__, key)
 
         # Update attributes
-        for field_name in self.model_fields:
+        for field_name in self.__class__.model_fields:
             value = getattr(fresh, field_name, None)
             setattr(self, field_name, value)
 
@@ -281,7 +301,7 @@ class Model(BaseModel, metaclass=ModelMeta):
             Self for chaining
         """
         for key, value in attributes.items():
-            if key in self.model_fields:
+            if key in self.__class__.model_fields:
                 setattr(self, key, value)
 
         return self
@@ -291,7 +311,7 @@ class Model(BaseModel, metaclass=ModelMeta):
     # ========================================================================
 
     @classmethod
-    def query(cls: Type[T]) -> QueryBuilder[T]:
+    def query(cls: Type[T]) -> QueryBuilder[T]:  # pragma: no cover
         """Get a query builder for this model.
 
         Returns:
@@ -331,6 +351,134 @@ class Model(BaseModel, metaclass=ModelMeta):
     # ========================================================================
     # Relationships
     # ========================================================================
+
+    def has_one_through(
+        self,
+        related: Type["Model"],
+        through: Type["Model"],
+        first_key: Optional[str] = None,
+        second_key: Optional[str] = None,
+        local_key: Optional[str] = None,
+        second_local_key: Optional[str] = None,
+    ) -> "HasOneThrough":
+        """Define a has-one-through relationship.
+
+        Args:
+            related: The final related model
+            through: The intermediate model
+            first_key: FK on through model pointing to this model
+            second_key: FK on related model pointing to through model
+            local_key: Local key on this model
+            second_local_key: Local key on through model
+
+        Returns:
+            HasOneThrough relation
+        """
+        from pyloquent.orm.relations.has_one_through import HasOneThrough
+        if first_key is None:
+            first_key = self._get_foreign_key()
+        if second_key is None:
+            second_key = through._get_foreign_key()
+        if local_key is None:
+            local_key = self.__primary_key__
+        if second_local_key is None:
+            second_local_key = through.__primary_key__
+        return HasOneThrough(self, related, through, first_key, second_key, local_key, second_local_key)
+
+    def has_many_through(
+        self,
+        related: Type["Model"],
+        through: Type["Model"],
+        first_key: Optional[str] = None,
+        second_key: Optional[str] = None,
+        local_key: Optional[str] = None,
+        second_local_key: Optional[str] = None,
+    ) -> "HasManyThrough":
+        """Define a has-many-through relationship.
+
+        Args:
+            related: The final related model
+            through: The intermediate model
+            first_key: FK on through model pointing to this model
+            second_key: FK on related model pointing to through model
+            local_key: Local key on this model
+            second_local_key: Local key on through model
+
+        Returns:
+            HasManyThrough relation
+        """
+        from pyloquent.orm.relations.has_many_through import HasManyThrough
+        if first_key is None:
+            first_key = self._get_foreign_key()
+        if second_key is None:
+            second_key = through._get_foreign_key()
+        if local_key is None:
+            local_key = self.__primary_key__
+        if second_local_key is None:
+            second_local_key = through.__primary_key__
+        return HasManyThrough(self, related, through, first_key, second_key, local_key, second_local_key)
+
+    def morph_to_many(
+        self,
+        related: Type["Model"],
+        name: str,
+        table: Optional[str] = None,
+        foreign_pivot_key: Optional[str] = None,
+        related_pivot_key: Optional[str] = None,
+        parent_key: Optional[str] = None,
+        related_key: Optional[str] = None,
+    ) -> "MorphToMany":
+        """Define a polymorphic many-to-many relationship.
+
+        Args:
+            related: Related model class
+            name: Morph name (e.g., 'taggable')
+            table: Pivot table name
+            foreign_pivot_key: FK column for this model on pivot table
+            related_pivot_key: FK column for related model on pivot table
+            parent_key: Local key on this model
+            related_key: Local key on related model
+
+        Returns:
+            MorphToMany relation
+        """
+        from pyloquent.orm.relations.morph_to_many import MorphToMany
+        return MorphToMany(
+            self, related, name, table,
+            foreign_pivot_key, related_pivot_key,
+            parent_key, related_key,
+        )
+
+    def morphed_by_many(
+        self,
+        related: Type["Model"],
+        name: str,
+        table: Optional[str] = None,
+        foreign_pivot_key: Optional[str] = None,
+        related_pivot_key: Optional[str] = None,
+        parent_key: Optional[str] = None,
+        related_key: Optional[str] = None,
+    ) -> "MorphedByMany":
+        """Define the inverse of a polymorphic many-to-many relationship.
+
+        Args:
+            related: Related model class
+            name: Morph name
+            table: Pivot table name
+            foreign_pivot_key: FK column for related model on pivot table
+            related_pivot_key: FK column for this model on pivot table
+            parent_key: Local key on this model
+            related_key: Local key on related model
+
+        Returns:
+            MorphedByMany relation
+        """
+        from pyloquent.orm.relations.morphed_by_many import MorphedByMany
+        return MorphedByMany(
+            self, related, name, table,
+            foreign_pivot_key, related_pivot_key,
+            parent_key, related_key,
+        )
 
     def has_many(
         self,
@@ -620,17 +768,23 @@ class Model(BaseModel, metaclass=ModelMeta):
     def was_changed(self, key: Optional[str] = None) -> bool:
         """Check if attribute was changed in last save.
 
-        Note: This is not fully implemented in current version.
-
         Args:
             key: Optional specific key to check
 
         Returns:
             True if changed
         """
-        # For now, just check if dirty
-        # In a full implementation, we'd track changes across saves
-        return self.is_dirty(key)
+        if key:
+            return key in self._changes
+        return len(self._changes) > 0
+
+    def get_changes(self) -> Dict[str, Any]:
+        """Get attributes changed during the last save.
+
+        Returns:
+            Dictionary of changed attributes
+        """
+        return self._changes.copy()
 
     def get_original(self, key: Optional[str] = None, default: Any = None) -> Any:
         """Get original attribute values.
@@ -655,7 +809,7 @@ class Model(BaseModel, metaclass=ModelMeta):
         Returns:
             True if dirty
         """
-        if key not in self.model_fields:
+        if key not in self.__class__.model_fields:
             return False
 
         current = getattr(self, key, None)
@@ -670,7 +824,7 @@ class Model(BaseModel, metaclass=ModelMeta):
             Dictionary of changed attributes
         """
         dirty = {}
-        for key in self.model_fields:
+        for key in self.__class__.model_fields:
             if self._is_dirty_key(key):
                 dirty[key] = getattr(self, key)
         return dirty
@@ -681,7 +835,7 @@ class Model(BaseModel, metaclass=ModelMeta):
         Returns:
             Dictionary of all attributes
         """
-        return {key: getattr(self, key) for key in self.model_fields}
+        return {key: getattr(self, key) for key in self.__class__.model_fields}
 
     def _get_attributes_for_save(self) -> Dict[str, Any]:
         """Get attributes to save to database.
@@ -757,18 +911,42 @@ class Model(BaseModel, metaclass=ModelMeta):
     def to_dict(self, **kwargs) -> Dict[str, Any]:
         """Convert model to dictionary.
 
-        Excludes hidden fields.
+        Respects __hidden__, __visible__, __appends__, and instance overrides.
 
         Returns:
             Dictionary representation
         """
         data = super().model_dump(**kwargs)
 
-        # Remove hidden fields
-        for key in self.__hidden__:
-            data.pop(key, None)
+        # Determine effective hidden list (instance overrides class)
+        hidden = self._instance_hidden if self._instance_hidden is not None else list(self.__hidden__)
+
+        # Determine effective visible list (instance overrides class)
+        visible = self._instance_visible if self._instance_visible else list(self.__visible__)
+
+        if visible:
+            data = {k: v for k, v in data.items() if k in visible}
+        else:
+            for key in hidden:
+                data.pop(key, None)
+
+        # Add computed accessor properties (__appends__)
+        for attr in list(self.__appends__) + list(self._appended):
+            accessor = f"get_{attr}_attribute"
+            if hasattr(self, accessor):
+                data[attr] = getattr(self, accessor)()
+            elif hasattr(self, attr) and isinstance(getattr(type(self), attr, None), property):
+                data[attr] = getattr(self, attr)
 
         return data
+
+    def to_array(self) -> Dict[str, Any]:
+        """Alias for to_dict.
+
+        Returns:
+            Dictionary representation
+        """
+        return self.to_dict()
 
     def model_dump(self, **kwargs) -> Dict[str, Any]:
         """Override Pydantic's model_dump to respect hidden fields.
@@ -784,7 +962,195 @@ class Model(BaseModel, metaclass=ModelMeta):
         Returns:
             JSON string
         """
-        return self.model_dump_json(**kwargs)
+        import json as _json
+        return _json.dumps(self.to_dict())
+
+    def make_hidden(self: T, *columns: str) -> T:
+        """Hide additional attributes on this instance.
+
+        Args:
+            *columns: Column names to hide
+
+        Returns:
+            Self for chaining
+        """
+        current = list(self._instance_hidden) if self._instance_hidden is not None else list(self.__hidden__)
+        for col in columns:
+            if col not in current:
+                current.append(col)
+        self._instance_hidden = current
+        return self
+
+    def make_visible(self: T, *columns: str) -> T:
+        """Make previously hidden attributes visible on this instance.
+
+        Args:
+            *columns: Column names to make visible
+
+        Returns:
+            Self for chaining
+        """
+        current = list(self._instance_hidden) if self._instance_hidden is not None else list(self.__hidden__)
+        self._instance_hidden = [c for c in current if c not in columns]
+        return self
+
+    def append(self: T, *attributes: str) -> T:
+        """Add computed accessor attributes to serialisation for this instance.
+
+        Args:
+            *attributes: Accessor names to append
+
+        Returns:
+            Self for chaining
+        """
+        self._appended = list(self._appended) + [a for a in attributes if a not in self._appended]
+        return self
+
+    def get_key(self) -> Any:
+        """Get the primary key value.
+
+        Returns:
+            Primary key value
+        """
+        return self._get_key()
+
+    def get_key_name(self) -> str:
+        """Get the primary key column name.
+
+        Returns:
+            Primary key name
+        """
+        return self.__primary_key__
+
+    async def update(self: T, attributes: Dict[str, Any]) -> T:
+        """Fill and save the model in one call.
+
+        Args:
+            attributes: Attributes to update
+
+        Returns:
+            The saved model
+        """
+        self.fill(attributes)
+        return await self.save()
+
+    async def increment(self: T, column: str, amount: Union[int, float] = 1, extra: Optional[Dict[str, Any]] = None) -> T:
+        """Atomically increment a column value.
+
+        Args:
+            column: Column to increment
+            amount: Amount to increment by (default: 1)
+            extra: Extra columns to update
+
+        Returns:
+            Self with updated value
+        """
+        query = self._new_query().where(self.__primary_key__, self._get_key())
+        await query.increment(column, amount, extra)
+        current = getattr(self, column, 0)
+        setattr(self, column, current + amount)
+        if extra:
+            for k, v in extra.items():
+                setattr(self, k, v)
+        self._original[column] = getattr(self, column)
+        return self
+
+    async def decrement(self: T, column: str, amount: Union[int, float] = 1, extra: Optional[Dict[str, Any]] = None) -> T:
+        """Atomically decrement a column value.
+
+        Args:
+            column: Column to decrement
+            amount: Amount to decrement by (default: 1)
+            extra: Extra columns to update
+
+        Returns:
+            Self with updated value
+        """
+        return await self.increment(column, -amount, extra)
+
+    async def touch(self: T) -> bool:
+        """Update the updated_at timestamp.
+
+        Returns:
+            True if timestamps are enabled, False otherwise
+        """
+        if not self.__timestamps__:
+            return False
+        from datetime import datetime
+        now = datetime.now()
+        if "updated_at" in self.__class__.model_fields:
+            setattr(self, "updated_at", now)
+            query = self._new_query().where(self.__primary_key__, self._get_key())
+            await query.update({"updated_at": now})
+            self._original["updated_at"] = now
+        return True
+
+    async def replicate(self: T, overrides: Optional[Dict[str, Any]] = None, except_: Optional[List[str]] = None) -> T:
+        """Create a saved copy of this model without its primary key.
+
+        Args:
+            overrides: Attribute values to override in the copy
+            except_: Attributes to exclude from the copy
+
+        Returns:
+            New saved model instance
+        """
+        await self._fire_event("replicating")
+        exclude = set(except_ or [])
+        exclude.add(self.__primary_key__)
+        attributes = {k: v for k, v in self._get_attributes().items() if k not in exclude}
+        if overrides:
+            attributes.update(overrides)
+        instance = self.__class__(**attributes)
+        await instance.save()
+        return instance
+
+    async def push(self: T) -> T:
+        """Save the model and all loaded relations.
+
+        Returns:
+            Self after saving
+        """
+        await self.save()
+        for relation_value in self._relations.values():
+            if isinstance(relation_value, Collection):
+                for model in relation_value:
+                    if hasattr(model, "push"):
+                        await model.push()
+            elif relation_value is not None and hasattr(relation_value, "push"):
+                await relation_value.push()
+        return self
+
+    async def load_missing(self: T, *relations: str) -> T:
+        """Eager load relations that are not already loaded.
+
+        Args:
+            *relations: Relation names to load if missing
+
+        Returns:
+            Self for chaining
+        """
+        to_load = [r for r in relations if not self.relation_loaded(r)]
+        if to_load:
+            await self.load(*to_load)
+        return self
+
+    async def load_count(self: T, *relations: str) -> T:
+        """Load the count of the specified relations onto the model.
+
+        Args:
+            *relations: Relation names to count
+
+        Returns:
+            Self with {relation}_count attributes set
+        """
+        for relation_name in relations:
+            if not hasattr(self, relation_name):
+                continue
+            relation = getattr(self, relation_name)()
+            count = await relation.query.count()
+            object.__setattr__(self, f"{relation_name}_count", count)
+        return self
 
     # ========================================================================
     # Class Methods for Querying
@@ -997,6 +1363,239 @@ class Model(BaseModel, metaclass=ModelMeta):
         for relation in relations:
             query = query.with_(relation)
         return query
+
+    @classmethod
+    def first_or_fail(cls: Type[T]) -> Any:
+        """Get the first record or raise ModelNotFoundException."""
+        return cls.query.first_or_fail()
+
+    @classmethod
+    def find_many(cls: Type[T], ids: List[Any]) -> Any:
+        """Find multiple records by primary key."""
+        return cls.query.where_in(cls.__primary_key__, ids).get()
+
+    @classmethod
+    def destroy(cls: Type[T], *ids: Any) -> Any:
+        """Delete one or more records by primary key.
+
+        Args:
+            *ids: Primary key value(s) or a single list
+
+        Returns:
+            Coroutine that resolves to number of deleted rows
+        """
+        async def _destroy():
+            id_list = list(ids[0]) if len(ids) == 1 and isinstance(ids[0], (list, tuple)) else list(ids)
+            return await cls.query.where_in(cls.__primary_key__, id_list).delete()
+        return _destroy()
+
+    @classmethod
+    def truncate(cls: Type[T]) -> Any:
+        """Truncate the model's table."""
+        async def _truncate():
+            return await cls.query.delete_all()
+        return _truncate()
+
+    @classmethod
+    def max(cls: Type[T], column: str) -> Any:
+        """Get the maximum value of a column."""
+        return cls.query.max(column)
+
+    @classmethod
+    def min(cls: Type[T], column: str) -> Any:
+        """Get the minimum value of a column."""
+        return cls.query.min(column)
+
+    @classmethod
+    def sum(cls: Type[T], column: str) -> Any:
+        """Get the sum of a column."""
+        return cls.query.sum(column)
+
+    @classmethod
+    def avg(cls: Type[T], column: str) -> Any:
+        """Get the average of a column."""
+        return cls.query.avg(column)
+
+    @classmethod
+    def exists(cls: Type[T]) -> Any:
+        """Check if any records exist."""
+        return cls.query.exists()
+
+    @classmethod
+    def doesnt_exist(cls: Type[T]) -> Any:
+        """Check if no records exist."""
+        return cls.query.doesnt_exist()
+
+    @classmethod
+    def value(cls: Type[T], column: str) -> Any:
+        """Get a single column value from the first record."""
+        return cls.query.value(column)
+
+    @classmethod
+    def select(cls: Type[T], *columns: str) -> "QueryBuilder[T]":
+        """Start a query selecting specific columns."""
+        return cls.query.select(*columns)
+
+    @classmethod
+    def select_raw(cls: Type[T], sql: str, bindings: Optional[List[Any]] = None) -> "QueryBuilder[T]":
+        """Start a query with a raw SELECT expression."""
+        return cls.query.select_raw(sql, bindings)
+
+    @classmethod
+    def distinct(cls: Type[T]) -> "QueryBuilder[T]":
+        """Start a query with DISTINCT."""
+        return cls.query.distinct()
+
+    @classmethod
+    def join(cls: Type[T], table: str, first: str, operator: Any = None, second: str = None) -> "QueryBuilder[T]":
+        """Start a query with a JOIN."""
+        return cls.query.join(table, first, operator, second)
+
+    @classmethod
+    def left_join(cls: Type[T], table: str, first: str, operator: Any = None, second: str = None) -> "QueryBuilder[T]":
+        """Start a query with a LEFT JOIN."""
+        return cls.query.left_join(table, first, operator, second)
+
+    @classmethod
+    def right_join(cls: Type[T], table: str, first: str, operator: Any = None, second: str = None) -> "QueryBuilder[T]":
+        """Start a query with a RIGHT JOIN."""
+        return cls.query.right_join(table, first, operator, second)
+
+    @classmethod
+    def group_by(cls: Type[T], *columns: str) -> "QueryBuilder[T]":
+        """Start a query with GROUP BY."""
+        return cls.query.group_by(*columns)
+
+    @classmethod
+    def having(cls: Type[T], column: str, operator: Any = None, value: Any = None) -> "QueryBuilder[T]":
+        """Start a query with a HAVING clause."""
+        return cls.query.having(column, operator, value)
+
+    @classmethod
+    def where_null(cls: Type[T], column: str) -> "QueryBuilder[T]":
+        """Start a query with WHERE column IS NULL."""
+        return cls.query.where_null(column)
+
+    @classmethod
+    def where_not_null(cls: Type[T], column: str) -> "QueryBuilder[T]":
+        """Start a query with WHERE column IS NOT NULL."""
+        return cls.query.where_not_null(column)
+
+    @classmethod
+    def where_between(cls: Type[T], column: str, values: Any) -> "QueryBuilder[T]":
+        """Start a query with WHERE column BETWEEN."""
+        return cls.query.where_between(column, values)
+
+    @classmethod
+    def where_not_between(cls: Type[T], column: str, values: Any) -> "QueryBuilder[T]":
+        """Start a query with WHERE column NOT BETWEEN."""
+        return cls.query.where_not_between(column, values)
+
+    @classmethod
+    def or_where(cls: Type[T], column: str, operator: Any = None, value: Any = None) -> "QueryBuilder[T]":
+        """Start a query with an OR WHERE clause."""
+        return cls.query.or_where(column, operator, value)
+
+    @classmethod
+    def where_raw(cls: Type[T], sql: str, bindings: Optional[List[Any]] = None) -> "QueryBuilder[T]":
+        """Start a query with a raw WHERE clause."""
+        return cls.query.where_raw(sql, bindings)
+
+    @classmethod
+    def where_column(cls: Type[T], first: str, operator: Any = None, second: str = None) -> "QueryBuilder[T]":
+        """Start a query comparing two columns."""
+        return cls.query.where_column(first, operator, second)
+
+    @classmethod
+    def latest(cls: Type[T], column: str = "created_at") -> "QueryBuilder[T]":
+        """Order by column descending."""
+        return cls.query.latest(column)
+
+    @classmethod
+    def oldest(cls: Type[T], column: str = "created_at") -> "QueryBuilder[T]":
+        """Order by column ascending."""
+        return cls.query.oldest(column)
+
+    @classmethod
+    def has(cls: Type[T], relation: str, operator: str = ">=", count: int = 1) -> "QueryBuilder[T]":
+        """Filter models that have a related model."""
+        return cls.query.has(relation, operator, count)
+
+    @classmethod
+    def doesnt_have(cls: Type[T], relation: str) -> "QueryBuilder[T]":
+        """Filter models that don't have a related model."""
+        return cls.query.doesnt_have(relation)
+
+    @classmethod
+    def where_has(cls: Type[T], relation: str, callback: Any = None, operator: str = ">=", count: int = 1) -> "QueryBuilder[T]":
+        """Filter models that have a related model matching conditions."""
+        return cls.query.where_has(relation, callback, operator, count)
+
+    @classmethod
+    def with_count(cls: Type[T], *relations: str) -> "QueryBuilder[T]":
+        """Add relationship count columns to query."""
+        return cls.query.with_count(*relations)
+
+    @classmethod
+    def chunk(cls: Type[T], count: int) -> Any:
+        """Chunk results in groups of the given size."""
+        return cls.query.chunk(count)
+
+    @classmethod
+    def paginate(cls: Type[T], per_page: Optional[int] = None, page: int = 1) -> Any:
+        """Paginate the results."""
+        return cls.query.paginate(per_page or cls.__per_page__, page)
+
+    @classmethod
+    def simple_paginate(cls: Type[T], per_page: Optional[int] = None, page: int = 1) -> Any:
+        """Simple paginate without total count."""
+        return cls.query.simple_paginate(per_page or cls.__per_page__, page)
+
+    @classmethod
+    def cursor(cls: Type[T]) -> Any:
+        """Iterate over results using a cursor."""
+        return cls.query.cursor()
+
+    @classmethod
+    def first_or_new(cls: Type[T], attributes: Dict[str, Any], values: Optional[Dict[str, Any]] = None) -> Any:
+        """Find first matching record or return a new (unsaved) instance."""
+        async def _first_or_new():
+            query = cls.query
+            for key, value in attributes.items():
+                query = query.where(key, value)
+            existing = await query.first()
+            if existing:
+                return existing
+            create_attributes = attributes.copy()
+            if values:
+                create_attributes.update(values)
+            return cls(**create_attributes)
+        return _first_or_new()
+
+    @classmethod
+    def where_exists(cls: Type[T], callback: Any) -> "QueryBuilder[T]":
+        """Filter records where a subquery exists."""
+        return cls.query.where_exists(callback)
+
+    @classmethod
+    def where_not_exists(cls: Type[T], callback: Any) -> "QueryBuilder[T]":
+        """Filter records where a subquery does not exist."""
+        return cls.query.where_not_exists(callback)
+
+    @classmethod
+    def lock_for_update(cls: Type[T]) -> "QueryBuilder[T]":
+        """Lock the selected rows for update."""
+        return cls.query.lock_for_update()
+
+    @classmethod
+    def for_share(cls: Type[T]) -> "QueryBuilder[T]":
+        """Lock the selected rows in share mode."""
+        return cls.query.for_share()
+
+    @classmethod
+    def to_raw_sql(cls: Type[T]) -> str:
+        """Get the raw SQL with bindings interpolated."""
+        return cls.query.to_raw_sql()
 
     # ========================================================================
     # Event Handling

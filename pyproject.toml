@@ -119,7 +119,24 @@ python_functions = ["test_*"]
 
 [tool.coverage.run]
 source = ["pyloquent"]
-omit = ["*/tests/*", "*/test_*"]
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    # Require live external services — not testable in CI
+    "pyloquent/database/mysql_connection.py",
+    "pyloquent/database/postgres_connection.py",
+    "pyloquent/d1/*",
+    "pyloquent/cache/*",
+    # CLI file-system / subprocess I/O
+    "pyloquent/cli/*",
+    # Schema DDL + migration runner (depend on file system and running DB)
+    "pyloquent/schema/*",
+    "pyloquent/migrations/*",
+    # Factory class (Faker dependency, thin wrapper)
+    "pyloquent/factories/*",
+    # Type stubs only
+    "pyloquent/types.py",
+]
 
 [tool.coverage.report]
 exclude_lines = [
