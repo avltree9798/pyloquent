@@ -51,7 +51,7 @@ class MySQLConnection(Connection):
         import aiomysql
 
         try:
-            self._pool = await aiomysql.create_pool(
+            pool_kwargs: Dict[str, Any] = dict(
                 host=self._host,
                 port=self._port,
                 db=self._database,
@@ -62,7 +62,12 @@ class MySQLConnection(Connection):
                 minsize=self._min_size,
                 maxsize=self._max_size,
             )
+            if self._pool_recycle is not None:
+                # aiomysql supports pool_recycle natively
+                pool_kwargs["pool_recycle"] = self._pool_recycle
+            self._pool = await aiomysql.create_pool(**pool_kwargs)
             self._connected = True
+            self._connected_at = __import__("time").monotonic()
         except Exception as e:
             raise ConnectionError(f"Failed to connect to MySQL database: {e}")
 
@@ -91,6 +96,18 @@ class MySQLConnection(Connection):
             # aiomysql handles most conversions automatically
             converted.append(binding)
         return converted
+
+    async def ping(self) -> bool:
+        """Acquire a pool connection and issue ``SELECT 1``."""
+        if not self._pool:
+            return False
+        try:
+            async with self._pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("SELECT 1")
+            return True
+        except Exception:
+            return False
 
     async def execute(self, sql: str, bindings: Optional[List[Any]] = None) -> Any:
         """Execute a SQL statement.
@@ -145,6 +162,7 @@ class MySQLConnection(Connection):
             converted_sql = sql.replace("?", "%s")
             converted_bindings = self._convert_bindings(bindings)
 
+            import aiomysql
             async with self._pool.acquire() as conn:
                 async with conn.cursor(aiomysql.DictCursor) as cur:
                     await cur.execute(converted_sql, converted_bindings)
@@ -173,6 +191,7 @@ class MySQLConnection(Connection):
             converted_sql = sql.replace("?", "%s")
             converted_bindings = self._convert_bindings(bindings)
 
+            import aiomysql
             async with self._pool.acquire() as conn:
                 async with conn.cursor(aiomysql.DictCursor) as cur:
                     await cur.execute(converted_sql, converted_bindings)

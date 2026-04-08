@@ -69,6 +69,7 @@ class SQLiteConnection(Connection):
             if self._journal_mode:
                 await self._connection.execute(f"PRAGMA journal_mode = {self._journal_mode.upper()}")
             self._connected = True
+            self._connected_at = __import__("time").monotonic()
         except Exception as e:
             raise ConnectionError(f"Failed to connect to SQLite database: {e}")
 
@@ -78,6 +79,16 @@ class SQLiteConnection(Connection):
             await self._connection.close()
             self._connection = None
             self._connected = False
+
+    async def ping(self) -> bool:
+        """Fast liveness check using the open aiosqlite handle."""
+        if not self._connection:
+            return False
+        try:
+            await self._connection.execute("SELECT 1")
+            return True
+        except Exception:
+            return False
 
     async def execute(self, sql: str, bindings: Optional[List[Any]] = None) -> Any:
         """Execute a SQL statement.
@@ -89,6 +100,7 @@ class SQLiteConnection(Connection):
         Returns:
             Last row ID for INSERT, row count for UPDATE/DELETE
         """
+        await self.ensure_connected()
         if not self._connection:
             raise QueryException("Not connected to database")
 
@@ -102,7 +114,22 @@ class SQLiteConnection(Connection):
                 return cursor.lastrowid
             else:
                 return cursor.rowcount
+        except QueryException:
+            raise
         except Exception as e:
+            if self._reconnect_on_error and not await self.ping():
+                await self.disconnect()
+                await self.connect()
+                try:
+                    cursor = await self._connection.execute(sql, bindings or [])
+                    if not self._in_transaction:
+                        await self._connection.commit()
+                    if sql.strip().upper().startswith("INSERT"):
+                        return cursor.lastrowid
+                    else:
+                        return cursor.rowcount
+                except Exception as retry_e:
+                    raise QueryException(f"Query execution failed: {retry_e}", sql, bindings)
             raise QueryException(f"Query execution failed: {e}", sql, bindings)
 
     async def fetch_all(
@@ -117,6 +144,7 @@ class SQLiteConnection(Connection):
         Returns:
             List of dictionaries representing rows
         """
+        await self.ensure_connected()
         if not self._connection:
             raise QueryException("Not connected to database")
 
@@ -124,7 +152,18 @@ class SQLiteConnection(Connection):
             cursor = await self._connection.execute(sql, bindings or [])
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
+        except QueryException:
+            raise
         except Exception as e:
+            if self._reconnect_on_error and not await self.ping():
+                await self.disconnect()
+                await self.connect()
+                try:
+                    cursor = await self._connection.execute(sql, bindings or [])
+                    rows = await cursor.fetchall()
+                    return [dict(row) for row in rows]
+                except Exception as retry_e:
+                    raise QueryException(f"Query execution failed: {retry_e}", sql, bindings)
             raise QueryException(f"Query execution failed: {e}", sql, bindings)
 
     async def fetch_one(
@@ -139,6 +178,7 @@ class SQLiteConnection(Connection):
         Returns:
             Dictionary representing the row, or None if no results
         """
+        await self.ensure_connected()
         if not self._connection:
             raise QueryException("Not connected to database")
 
@@ -146,7 +186,18 @@ class SQLiteConnection(Connection):
             cursor = await self._connection.execute(sql, bindings or [])
             row = await cursor.fetchone()
             return dict(row) if row else None
+        except QueryException:
+            raise
         except Exception as e:
+            if self._reconnect_on_error and not await self.ping():
+                await self.disconnect()
+                await self.connect()
+                try:
+                    cursor = await self._connection.execute(sql, bindings or [])
+                    row = await cursor.fetchone()
+                    return dict(row) if row else None
+                except Exception as retry_e:
+                    raise QueryException(f"Query execution failed: {retry_e}", sql, bindings)
             raise QueryException(f"Query execution failed: {e}", sql, bindings)
 
     async def execute_many(self, sql: str, rows: List[List[Any]]) -> int:

@@ -49,7 +49,7 @@ class PostgresConnection(Connection):
         import asyncpg
 
         try:
-            self._pool = await asyncpg.create_pool(
+            pool_kwargs: Dict[str, Any] = dict(
                 host=self._host,
                 port=self._port,
                 database=self._database,
@@ -59,7 +59,12 @@ class PostgresConnection(Connection):
                 min_size=self._min_size,
                 max_size=self._max_size,
             )
+            if self._pool_recycle is not None:
+                # asyncpg recycles idle connections after this many seconds
+                pool_kwargs["max_inactive_connection_lifetime"] = float(self._pool_recycle)
+            self._pool = await asyncpg.create_pool(**pool_kwargs)
             self._connected = True
+            self._connected_at = __import__("time").monotonic()
         except Exception as e:
             raise ConnectionError(f"Failed to connect to PostgreSQL database: {e}")
 
@@ -87,6 +92,17 @@ class PostgresConnection(Connection):
             # asyncpg handles most conversions automatically
             converted.append(binding)
         return converted
+
+    async def ping(self) -> bool:
+        """Acquire a pool connection and issue ``SELECT 1``."""
+        if not self._pool:
+            return False
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+            return True
+        except Exception:
+            return False
 
     async def execute(self, sql: str, bindings: Optional[List[Any]] = None) -> Any:
         """Execute a SQL statement.

@@ -5,7 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] - 2025-04-08
+## [0.3.1] - 2026-04-08
+
+### Fixed
+
+- **`MySQLConnection.fetch_all` / `fetch_one`** — `aiomysql` was only imported inside `connect()` but referenced as `aiomysql.DictCursor` in `fetch_all` and `fetch_one` without a local import, causing `NameError: name 'aiomysql' is not defined` on every MySQL query.  Both methods now import `aiomysql` locally before use.
+
+### Added
+
+- **Connection health checks** — all three driver connections (`SQLiteConnection`, `PostgresConnection`, `MySQLConnection`) now accept three new config keys:
+  - `pool_pre_ping` *(bool, default `False`)* — executes `SELECT 1` before every query and transparently reconnects if the connection is stale.  Equivalent to SQLAlchemy's `pool_pre_ping`.
+  - `pool_recycle` *(int seconds, default `None`)* — maximum connection age before recycling.  For SQLite this triggers a reconnect on the next query after the threshold; for asyncpg it is forwarded as `max_inactive_connection_lifetime`; for aiomysql it is forwarded as the native `pool_recycle` pool option.
+  - `reconnect_on_error` *(bool, default `False`)* — if a query raises a driver-level exception *and* a subsequent `ping()` confirms the connection is dead, the driver disconnects, reconnects, and retries the original statement once before re-raising as `QueryException`.  SQL errors on a live connection (bad table name, constraint violation, etc.) do **not** trigger reconnect.
+- **`Connection.ping()`** — base-class implementation that temporarily disables `pool_pre_ping` to avoid infinite recursion, then issues `SELECT 1` via `fetch_one`.  All three concrete drivers override this with a lighter, pool-native check.
+- **`Connection.ensure_connected()`** — evaluates `pool_recycle` age and `pool_pre_ping` liveness, then calls `disconnect` + `connect` if a reconnect is needed.  Called automatically at the top of every `execute`, `fetch_all`, and `fetch_one` in `SQLiteConnection`.
+
+## [0.3.0] - 2026-04-08
 
 ### Added
 
