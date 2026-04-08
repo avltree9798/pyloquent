@@ -2,10 +2,12 @@
 
 import asyncio
 from datetime import datetime
-from typing import Optional
+from typing import ClassVar, Dict, List, Optional
 
 from pyloquent import ConnectionManager, Model, SoftDeletes
 from pyloquent.database.manager import set_manager
+from pyloquent.orm.identity_map import IdentityMap
+from pyloquent.orm.type_decorator import TypeDecorator, register_type
 
 
 # Configure connection manager
@@ -45,6 +47,64 @@ class Post(Model):
 
     def author(self):
         return self.belongs_to(User)
+
+
+# ---------------------------------------------------------------------------
+# 0.3.0 model definitions
+# ---------------------------------------------------------------------------
+
+class Product(Model):
+    """Model with TypeDecorator casts (json + comma_separated)."""
+
+    __table__ = "products"
+    __fillable__ = ["name", "tags", "metadata"]
+    __timestamps__ = False
+    __casts__: ClassVar[Dict] = {"metadata": "json", "tags": "comma_separated"}
+
+    id: Optional[int] = None
+    name: str
+    metadata: Optional[dict] = None
+    tags: Optional[List[str]] = None
+
+
+class Animal(Model):
+    """Base STI model — all subtypes stored in the 'animals' table."""
+
+    __table__ = "animals"
+    __fillable__ = ["name", "type"]
+    __timestamps__ = False
+
+    id: Optional[int] = None
+    name: str
+    type: str = "animal"
+
+
+class Dog(Animal):
+    """STI subtype — queries automatically scoped to type='dog'."""
+
+    __discriminator__ = "type"
+    __discriminator_value__ = "dog"
+
+
+class Cat(Animal):
+    """STI subtype — queries automatically scoped to type='cat'."""
+
+    __discriminator__ = "type"
+    __discriminator_value__ = "cat"
+
+
+class OrderItem(Model):
+    """Model with a composite primary key."""
+
+    __table__ = "order_items"
+    __primary_key__ = ["order_id", "product_id"]
+    __incrementing__ = False
+    __fillable__ = ["order_id", "product_id", "quantity"]
+    __timestamps__ = False
+
+    order_id: int
+    product_id: int
+    quantity: int = 1
 
 
 async def setup_database():
@@ -88,6 +148,38 @@ async def setup_database():
             is_published BOOLEAN DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    """
+    )
+
+    await conn.execute(
+        """
+        CREATE TABLE products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            metadata TEXT,
+            tags TEXT
+        )
+    """
+    )
+
+    await conn.execute(
+        """
+        CREATE TABLE animals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL DEFAULT 'animal'
+        )
+    """
+    )
+
+    await conn.execute(
+        """
+        CREATE TABLE order_items (
+            order_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            quantity INTEGER DEFAULT 1,
+            PRIMARY KEY (order_id, product_id)
         )
     """
     )
@@ -493,6 +585,158 @@ async def find_many_destroy_examples():
     print(f"After destroy → {remaining.count()} users remaining")
 
 
+# ---------------------------------------------------------------------------
+# 0.3.0 feature demos
+# ---------------------------------------------------------------------------
+
+async def type_decorator_examples():
+    """Demonstrate TypeDecorator casts (json + comma_separated)."""
+    print("\n=== 0.3.0 TypeDecorator Casts ===")
+
+    p = await Product.create({
+        "name": "Gadget",
+        "metadata": {"color": "red", "weight": 1.5},
+        "tags": ["sale", "new", "featured"],
+    })
+    print(f"Saved product id={p.id}")
+
+    fresh = await Product.query.find(p.id)
+    print(f"metadata (dict):  {fresh.metadata}")
+    print(f"tags     (list):  {fresh.tags}")
+
+    # Demonstrate a custom TypeDecorator registered at runtime
+    class UpperCaseType(TypeDecorator):
+        impl = "TEXT"
+
+        def process_bind_param(self, value, dialect=None):
+            return value.upper() if isinstance(value, str) else value
+
+        def process_result_value(self, value, dialect=None):
+            return value
+
+    register_type("uppercase", UpperCaseType())
+    print("Custom TypeDecorator registered as 'uppercase'")
+
+
+async def sti_examples():
+    """Demonstrate Single Table Inheritance (STI)."""
+    print("\n=== 0.3.0 Single Table Inheritance ===")
+
+    await Animal.create({"name": "Rex",      "type": "dog"})
+    await Animal.create({"name": "Whiskers", "type": "cat"})
+    await Animal.create({"name": "Unknown",  "type": "animal"})
+
+    dogs = await Dog.query.get()
+    cats = await Cat.query.get()
+    all_animals = await Animal.query.get()
+
+    print(f"Dog.query → {dogs.count()} dog(s):    {[d.name for d in dogs]}")
+    print(f"Cat.query → {cats.count()} cat(s):    {[c.name for c in cats]}")
+    print(f"Animal.query → {all_animals.count()} animals total")
+
+
+async def composite_pk_examples():
+    """Demonstrate composite primary keys."""
+    print("\n=== 0.3.0 Composite Primary Keys ===")
+
+    item = OrderItem(order_id=1, product_id=10, quantity=3)
+    await item.save()
+
+    found = await OrderItem.query.where("order_id", 1).where("product_id", 10).first()
+    print(f"Saved and retrieved: order_id={found.order_id}, product_id={found.product_id}, qty={found.quantity}")
+
+    key = found._get_key()
+    print(f"_get_key() returns dict: {key}")
+
+    await found.delete()
+    gone = await OrderItem.query.where("order_id", 1).where("product_id", 10).first()
+    print(f"After delete → found: {gone is not None}")
+
+
+async def identity_map_examples():
+    """Demonstrate the IdentityMap for per-session object identity."""
+    print("\n=== 0.3.0 Identity Map ===")
+
+    alice = await User.create({"name": "IdentityAlice", "email": "idalice@example.com"})
+
+    imap = IdentityMap()
+    r1 = await User.query.with_identity_map(imap).where("id", alice.id).first()
+    r2 = await User.query.with_identity_map(imap).where("id", alice.id).first()
+    print(f"Same Python object returned: {r1 is r2}")
+
+    async with IdentityMap.session() as session_map:
+        s1 = await User.query.with_identity_map(session_map).find(alice.id)
+        s2 = await User.query.with_identity_map(session_map).find(alice.id)
+        print(f"Session map size: {len(session_map)}, same object: {s1 is s2}")
+    print(f"Session map cleared on exit: {len(session_map) == 0}")
+
+
+async def cte_examples():
+    """Demonstrate WITH / WITH RECURSIVE CTEs."""
+    print("\n=== 0.3.0 CTEs ===")
+
+    from pyloquent.query.builder import QueryBuilder
+    from pyloquent.grammars.sqlite_grammar import SQLiteGrammar
+
+    g = SQLiteGrammar()
+
+    # Non-recursive CTE
+    sql, _ = (
+        QueryBuilder(g)
+        .with_cte("active", lambda q: q.from_("users").where("is_active", True))
+        .from_("active")
+        .to_sql()
+    )
+    print(f"WITH CTE SQL: {sql[:80]}...")
+
+    # Recursive CTE (numbers 1–5)
+    sql2, _ = (
+        QueryBuilder(g)
+        .with_recursive_cte(
+            "nums",
+            lambda q: q.from_("(VALUES (1))").select_raw("1 AS n"),
+            lambda q: q.from_("nums").select_raw("n + 1 AS n").where("n", "<", 5),
+        )
+        .from_("nums")
+        .to_sql()
+    )
+    print(f"WITH RECURSIVE SQL: {sql2[:80]}...")
+
+
+async def window_function_examples():
+    """Demonstrate window functions (ROW_NUMBER, RANK, SUM)."""
+    print("\n=== 0.3.0 Window Functions ===")
+
+    from pyloquent.query.builder import QueryBuilder
+    from pyloquent.grammars.sqlite_grammar import SQLiteGrammar
+
+    g = SQLiteGrammar()
+
+    sql, _ = (
+        QueryBuilder(g)
+        .from_("users")
+        .select("name", "score")
+        .select_window("ROW_NUMBER", partition_by=["is_active"], order_by=["score"], alias="row_num")
+        .select_window("SUM", "score", order_by=["name"], alias="running_total")
+        .to_sql()
+    )
+    print(f"Window SQL: {sql}")
+
+
+async def batch_insert_examples():
+    """Demonstrate execute_many batch insert."""
+    print("\n=== 0.3.0 Batch Insert ===")
+
+    rows = [
+        {"name": "Widget A", "metadata": None, "tags": None},
+        {"name": "Widget B", "metadata": None, "tags": None},
+        {"name": "Widget C", "metadata": None, "tags": None},
+    ]
+    await Product.query.insert(rows)
+    total = await Product.query.count()
+    print(f"Batch-inserted 3 rows → total products: {total}")
+
+
 async def main():
     """Run all examples."""
     print("Pyloquent Comprehensive Usage Examples")
@@ -516,6 +760,15 @@ async def main():
     await collection_advanced_examples()
     await model_instance_examples()
     await find_many_destroy_examples()
+
+    # 0.3.0 features
+    await type_decorator_examples()
+    await sti_examples()
+    await composite_pk_examples()
+    await identity_map_examples()
+    await cte_examples()
+    await window_function_examples()
+    await batch_insert_examples()
 
     print("\n" + "=" * 40)
     print("Examples completed!")

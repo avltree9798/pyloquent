@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Generic, Optional, Type, TypeVar
 
-from pyloquent.query.builder import QueryBuilder
+from pyloquent.query.builder import QueryBuilder, _UNSET
 
 if TYPE_CHECKING:  # pragma: no cover
     from pyloquent.orm.collection import Collection
@@ -102,7 +102,7 @@ class Relation(ABC, Generic[T]):
         """
         return await self.query.count()
 
-    def where(self, column: str, operator: Any = None, value: Any = None) -> QueryBuilder[T]:
+    def where(self, column: str, operator: Any = None, value: Any = _UNSET) -> QueryBuilder[T]:
         """Add a where clause to the relation query.
 
         Args:

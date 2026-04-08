@@ -12,7 +12,7 @@ Pyloquent brings the elegant ORM patterns from Laravel's Eloquent to Python, wit
 - **🚀 Async/Await First** - Built from the ground up for async Python
 - **✅ Pydantic Integration** - Full validation and type safety
 - **🔗 Rich Relationships** - HasOne, HasMany, BelongsTo, BelongsToMany, HasOneThrough, HasManyThrough, MorphOne, MorphMany, MorphTo, MorphToMany, MorphedByMany
-- **🗃️ Query Builder** - Fluent, chainable query interface with 60+ methods
+- **🗃️ Query Builder** - Fluent, chainable query interface with 70+ methods
 - **💾 Multiple Drivers** - SQLite, PostgreSQL, MySQL, Cloudflare D1
 - **⚡ Query Caching** - Memory, File, and Redis cache stores
 - **📝 Migrations** - Full migration system with CLI
@@ -25,6 +25,16 @@ Pyloquent brings the elegant ORM patterns from Laravel's Eloquent to Python, wit
 - **🔁 Upsert & Bulk Ops** - `upsert()`, `insert_or_ignore()`, `update_or_insert()`, `increment()`, `decrement()`
 - **🔍 Subquery Support** - `where_exists()`, `where_not_exists()` with callable subqueries
 - **📄 Pagination** - `paginate()`, `simple_paginate()`, `cursor()` streaming
+- **🪟 CTEs & Window Functions** *(0.3.0)* - `with_cte()`, `with_recursive_cte()`, `select_window()` for `ROW_NUMBER`, `RANK`, running totals, etc.
+- **🔀 Advanced Joins** *(0.3.0)* - `join_sub()`, `join_raw()`, `join_on()`, `full_join()` with callback ON clauses
+- **🧬 Single Table Inheritance** *(0.3.0)* - `__discriminator__` / `__discriminator_value__` with automatic global scope
+- **🔑 Composite Primary Keys** *(0.3.0)* - `__primary_key__ = ['col_a', 'col_b']`
+- **🏷️ Hybrid Properties** *(0.3.0)* - `@hybrid_property` with instance getter and class-level SQL expression
+- **🔧 Custom Type Decorators** *(0.3.0)* - `TypeDecorator`, `JSONType`, `CommaSeparatedType`, pluggable via `__casts__`
+- **🗺️ Identity Map** *(0.3.0)* - `IdentityMap` per-session row cache with `IdentityMap.session()` async context
+- **📡 Schema Reflection** *(0.3.0)* - `compile_get_tables/columns/indexes/foreign_keys` on all grammars
+- **⚡ Batch Insert** *(0.3.0)* - `insert([...])` uses native `executemany` for bulk performance
+- **🔄 Sync Support** *(0.3.0)* - `run_sync()`, `@sync` decorator, `SyncConnectionManager` for scripts/notebooks
 
 ## Quick Start
 
@@ -112,7 +122,224 @@ await post.tags().sync([tag2.id, tag3.id])
 tags = await post.tags().get()
 ```
 
-### Query Builder — New Methods
+### 0.3.0 — CTEs, Window Functions & Advanced Joins
+
+```python
+# Common Table Expression (WITH clause)
+active_orders = await (
+    Order.query
+    .with_cte('recent', lambda q: q.from_('orders').where('created_at', '>', cutoff))
+    .from_('recent')
+    .order_by('created_at', 'desc')
+    .get()
+)
+
+# Recursive CTE — tree traversal
+from pyloquent import QueryBuilder
+tree = await (
+    QueryBuilder(grammar, conn)
+    .with_recursive_cte(
+        'tree',
+        lambda q: q.from_('categories').where('parent_id', None),
+        lambda q: q.from_('categories')
+                   .join('tree', 'tree.id', '=', 'categories.parent_id'),
+    )
+    .from_('tree')
+    .get()
+)
+
+# Window function — rank within partition
+results = await (
+    Sale.query
+    .select('region', 'rep', 'amount')
+    .select_window('RANK', partition_by=['region'], order_by=['amount DESC'], alias='region_rank')
+    .get()
+)
+
+# Running total with ROWS framing
+from pyloquent import WindowFrame
+frame = WindowFrame(mode='ROWS', start='UNBOUNDED PRECEDING', end='CURRENT ROW')
+results = await (
+    Order.query
+    .select('created_at', 'total')
+    .select_window('SUM', 'total', order_by=['created_at'], frame=frame, alias='running_total')
+    .get()
+)
+
+# Subquery join
+results = await (
+    User.query
+    .join_sub(
+        lambda q: q.from_('orders').select('user_id').where('status', 'paid'),
+        alias='paid_orders',
+        first='users.id', operator='=', second='paid_orders.user_id',
+    )
+    .get()
+)
+
+# Raw JOIN fragment
+results = await (
+    User.query
+    .join_raw('LEFT JOIN audit_log al ON al.user_id = users.id AND al.active = ?', [1])
+    .get()
+)
+
+# Callback ON clause (multi-condition)
+results = await (
+    User.query
+    .join_on('orders', lambda j:
+        j.on('orders.user_id', '=', 'users.id')
+         .or_on('orders.alt_id', '=', 'users.id')
+    )
+    .get()
+)
+```
+
+### 0.3.0 — Single Table Inheritance
+
+```python
+class Animal(Model):
+    __table__ = 'animals'
+    __fillable__ = ['name', 'type']
+
+    id: Optional[int] = None
+    name: str
+    type: str = 'animal'
+
+class Dog(Animal):
+    __discriminator__ = 'type'
+    __discriminator_value__ = 'dog'
+
+class Cat(Animal):
+    __discriminator__ = 'type'
+    __discriminator_value__ = 'cat'
+
+# Each subclass is automatically scoped — no WHERE type='dog' needed
+dogs = await Dog.query.get()   # WHERE type = 'dog'
+cats = await Cat.query.get()   # WHERE type = 'cat'
+all_  = await Animal.query.get()  # no discriminator scope
+```
+
+### 0.3.0 — Composite Primary Keys
+
+```python
+class OrderItem(Model):
+    __table__ = 'order_items'
+    __primary_key__ = ['order_id', 'product_id']
+    __incrementing__ = False
+    __fillable__ = ['order_id', 'product_id', 'quantity']
+
+    order_id: int
+    product_id: int
+    quantity: int = 1
+
+item = OrderItem(order_id=1, product_id=42, quantity=3)
+await item.save()
+await item.delete()  # DELETE WHERE order_id=1 AND product_id=42
+```
+
+### 0.3.0 — Hybrid Properties
+
+```python
+from pyloquent import hybrid_property
+from pyloquent.query.expression import RawExpression
+
+class User(Model):
+    first_name: str
+    last_name: str
+
+    @hybrid_property
+    def full_name(self) -> str:
+        return f'{self.first_name} {self.last_name}'
+
+    @full_name.expression
+    @classmethod
+    def full_name(cls):
+        return RawExpression("first_name || ' ' || last_name")
+
+user = User(first_name='Jane', last_name='Doe')
+print(user.full_name)       # 'Jane Doe'  (instance)
+expr = User.full_name       # RawExpression  (class-level, for WHERE/SELECT)
+```
+
+### 0.3.0 — Custom Type Decorators
+
+```python
+import json
+from pyloquent import TypeDecorator, register_type, JSONType
+
+# Use a built-in type
+class Product(Model):
+    __casts__ = {'metadata': 'json', 'tags': 'comma_separated'}
+    metadata: Optional[dict] = None
+    tags: Optional[list] = None
+
+# Define and register a custom type
+class EncryptedType(TypeDecorator):
+    impl = 'TEXT'
+    def process_bind_param(self, value, dialect=None):
+        return encrypt(value)   # your encryption logic
+    def process_result_value(self, value, dialect=None):
+        return decrypt(value)
+
+register_type('encrypted', EncryptedType())
+
+class Secret(Model):
+    __casts__ = {'api_key': 'encrypted'}
+    api_key: Optional[str] = None
+```
+
+### 0.3.0 — Identity Map
+
+```python
+from pyloquent import IdentityMap
+
+# Scoped session — same DB row → same Python object
+async with IdentityMap.session() as imap:
+    u1 = await User.query.with_identity_map(imap).find(1)
+    u2 = await User.query.with_identity_map(imap).find(1)
+    assert u1 is u2   # True — no second query hydration
+```
+
+### 0.3.0 — Batch Insert & SQLite WAL Mode
+
+```python
+# Batch insert uses native executemany automatically
+await Product.query.insert([
+    {'name': 'Widget A', 'price': 9.99},
+    {'name': 'Widget B', 'price': 19.99},
+    {'name': 'Widget C', 'price': 29.99},
+])  # one executemany call, not three execute() calls
+
+# Enable WAL mode for concurrent SQLite reads
+manager.add_connection('default', {
+    'driver': 'sqlite',
+    'database': 'app.db',
+    'journal_mode': 'wal',
+}, default=True)
+```
+
+### 0.3.0 — Sync Support
+
+```python
+from pyloquent.sync import run_sync, sync, SyncConnectionManager
+
+# Run any coroutine synchronously
+user = run_sync(User.find(1))
+
+# Decorator form
+@sync
+async def get_active_users():
+    return await User.where('active', True).get()
+
+users = get_active_users()  # no await needed
+
+# Synchronous script / notebook usage
+with SyncConnectionManager({'default': {'driver': 'sqlite', 'database': 'app.db'}}) as mgr:
+    rows = mgr.table('users').where('active', True).get()
+```
+
+### Query Builder — Methods
 
 ```python
 # Atomic increment / decrement
@@ -296,6 +523,89 @@ pyloquent migrate:rollback
 pyloquent migrate:fresh
 ```
 
+### 0.3.0 — Cloudflare D1 Native Worker Binding
+
+**`wrangler.jsonc`** — `compatibility_flags: ["python_workers"]` is required:
+
+```jsonc
+{
+  "name": "my-pyloquent-worker",
+  "main": "src/entry.py",
+  "compatibility_flags": ["python_workers"],
+  "compatibility_date": "2026-04-08",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "YOUR_DB_NAME",
+      "database_id": "YOUR_DB_ID"
+    }
+  ]
+}
+```
+
+```python
+# src/entry.py
+from workers import Response, WorkerEntrypoint
+from pyloquent import ConnectionManager, Model
+from pyloquent.database.manager import set_manager
+from typing import Optional
+
+class User(Model):
+    __table__ = 'users'
+    __fillable__ = ['name', 'email']
+    id: Optional[int] = None
+    name: str
+    email: str
+
+class Default(WorkerEntrypoint):
+    async def fetch(self, request):
+        # self.env.DB is the D1 binding declared in wrangler.jsonc
+        manager = ConnectionManager.from_binding(self.env.DB)
+        set_manager(manager)
+
+        users = await User.where('active', True).get()
+        return Response.json(users.to_dict_list())
+```
+
+```python
+# Low-level: batch writes, dump, DDL, schema reflection
+from pyloquent.d1.binding import D1BindingConnection, D1Statement
+
+conn = D1BindingConnection(self.env.DB)
+await conn.connect()
+
+# Atomic multi-statement batch
+results = await conn.batch([
+    ("INSERT INTO users (name) VALUES (?)", ["Alice"]),
+    ("INSERT INTO users (name) VALUES (?)", ["Bob"]),
+    ("SELECT COUNT(*) AS n FROM users", None),
+])
+count = results[-1][0]["n"]   # 2
+
+# Transactions via db.batch() (no BEGIN/COMMIT in Workers)
+async with manager.transaction():
+    await User.create({'name': 'Carol', 'email': 'carol@example.com'})
+    await Post.create({'user_id': 1, 'title': 'Hello'})
+
+# Bulk insert — one round-trip
+await conn.execute_many(
+    "INSERT INTO products (name, price) VALUES (?, ?)",
+    [["A", 9.99], ["B", 19.99], ["C", 29.99]],
+)
+
+# Schema reflection
+tables  = await conn.get_tables()
+columns = await conn.get_columns('users')
+
+# Database dump (backup)
+data = await conn.dump()  # bytes
+
+# D1Statement prepared-statement wrapper
+stmt = D1Statement(conn, "SELECT * FROM users WHERE id = ?").bind(1)
+row  = await stmt.first()   # dict or None
+rows = await stmt.all()     # list of dicts
+```
+
 ### FastAPI Integration
 
 ```python
@@ -321,12 +631,13 @@ async def list_users(page: int = 1):
 
 ## Available Drivers
 
-| Driver | Package | Status |
-|--------|---------|--------|
+| Driver | Package / Mode | Status |
+|--------|---------------|--------|
 | SQLite | Built-in (`aiosqlite`) | ✅ Ready |
 | PostgreSQL | `asyncpg` | ✅ Ready |
 | MySQL | `aiomysql` | ✅ Ready |
-| Cloudflare D1 | HTTP API | ✅ Ready |
+| Cloudflare D1 (HTTP) | `httpx` + REST API | ✅ Ready |
+| Cloudflare D1 (Binding) | Native Worker binding (`env.DB`) | ✅ Ready *(0.3.0)* |
 
 ## CLI Commands
 
@@ -388,6 +699,15 @@ Python already has capable ORMs. Here is where Pyloquent fits in:
 | **Built-in soft deletes** | ✅ | ❌ | ❌ | ❌ |
 | **Model events/observers** | ✅ | ⚠ | ✅ signals | ⚠ |
 | **Query caching** | ✅ | ❌ | ❌ | ❌ |
+| **CTEs / window functions** | ✅ | ✅ | ⚠ limited | ⚠ |
+| **Composite primary keys** | ✅ | ✅ | ✅ | ⚠ |
+| **Single table inheritance** | ✅ | ✅ | ⚠ manual | ⚠ |
+| **Identity map / row cache** | ✅ | ✅ | ⚠ | ⚠ |
+| **Hybrid properties** | ✅ | ✅ | ❌ | ❌ |
+| **Custom type decorators** | ✅ | ✅ | ⚠ | ❌ |
+| **Schema reflection** | ✅ all drivers | ✅ | ✅ | ⚠ |
+| **Batch insert (executemany)** | ✅ | ✅ | ✅ | ✅ |
+| **Sync support wrapper** | ✅ | ✅ | ✅ | ❌ |
 
 **You do not need to know Laravel to benefit from Pyloquent.** The design choices simply happen to be good ones:
 

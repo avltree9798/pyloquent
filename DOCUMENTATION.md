@@ -1325,6 +1325,495 @@ except Exception:
 
 ---
 
+## 0.3.0 — New Features
+
+### CTEs (Common Table Expressions)
+
+Use `with_cte()` or `with_recursive_cte()` to attach a `WITH` or `WITH RECURSIVE`
+clause to any query.  Both methods accept either a builder instance or a callback
+that receives a fresh builder.
+
+```python
+# Named CTE via callback
+results = await (
+    Order.query
+    .with_cte('recent', lambda q: q.from_('orders').where('status', 'open'))
+    .from_('recent')
+    .order_by('created_at', 'desc')
+    .get()
+)
+
+# Recursive CTE — hierarchical category tree
+from pyloquent import QueryBuilder
+
+tree = await (
+    QueryBuilder(grammar, conn)
+    .with_recursive_cte(
+        'tree',
+        lambda q: q.from_('categories').where('parent_id', None),          # anchor
+        lambda q: q.from_('categories')
+                   .join('tree', 'tree.id', '=', 'categories.parent_id'),  # recursive
+    )
+    .from_('tree')
+    .select('id', 'name', 'parent_id')
+    .get()
+)
+```
+
+### Window Functions
+
+`select_window()` adds a window function column to the `SELECT` list.
+
+```python
+from pyloquent import WindowFrame
+
+# ROW_NUMBER partitioned by region
+results = await (
+    Sale.query
+    .select('region', 'rep', 'amount')
+    .select_window('RANK', partition_by=['region'], order_by=['amount DESC'], alias='rank')
+    .get()
+)
+
+# Running total with explicit ROWS frame
+frame = WindowFrame(mode='ROWS', start='UNBOUNDED PRECEDING', end='CURRENT ROW')
+results = await (
+    Order.query
+    .select('created_at', 'total')
+    .select_window('SUM', 'total', order_by=['created_at'], frame=frame, alias='running_total')
+    .get()
+)
+```
+
+Supported aggregates: any function name is accepted — `ROW_NUMBER`, `RANK`, `DENSE_RANK`,
+`NTILE`, `LAG`, `LEAD`, `FIRST_VALUE`, `LAST_VALUE`, `SUM`, `AVG`, `COUNT`, `MIN`, `MAX`.
+
+### Advanced Joins
+
+```python
+# Raw JOIN fragment (custom ON clause, extra bindings)
+User.query.join_raw('LEFT JOIN audit_log al ON al.user_id = users.id AND al.active = ?', [1])
+
+# Subquery join — builder or callback
+User.query.join_sub(
+    lambda q: q.from_('orders').select('user_id').where('status', 'paid'),
+    alias='paid',
+    first='users.id', operator='=', second='paid.user_id',
+)
+
+# Left subquery join
+User.query.left_join_sub(
+    lambda q: q.from_('orders').select('user_id'),
+    alias='o', first='users.id', operator='=', second='o.user_id',
+)
+
+# Callback ON clause — multi-condition joins
+User.query.join_on(
+    'orders',
+    lambda j: j.on('orders.user_id', '=', 'users.id')
+               .or_on('orders.alt_id', '=', 'users.id'),
+)
+
+# Full outer join
+QueryBuilder(grammar, conn).from_('a').full_join('b', 'a.id', '=', 'b.a_id').get()
+```
+
+### Single Table Inheritance (STI)
+
+Map multiple Python classes to a single database table using a discriminator column.
+
+```python
+class Animal(Model):
+    __table__ = 'animals'
+    __fillable__ = ['name', 'type']
+
+    id: Optional[int] = None
+    name: str
+    type: str = 'animal'
+
+class Dog(Animal):
+    __discriminator__ = 'type'          # column that holds the type value
+    __discriminator_value__ = 'dog'     # value for this subclass
+
+class Cat(Animal):
+    __discriminator__ = 'type'
+    __discriminator_value__ = 'cat'
+
+# Queries are automatically scoped — no manual WHERE needed
+dogs = await Dog.query.get()     # SELECT … WHERE type = 'dog'
+cats = await Cat.query.get()     # SELECT … WHERE type = 'cat'
+all_ = await Animal.query.get()  # no scope applied
+```
+
+`ModelMeta` registers a global scope for the discriminator value at class creation time.
+
+### Composite Primary Keys
+
+Set `__primary_key__` to a list of column names.
+
+```python
+class OrderItem(Model):
+    __table__ = 'order_items'
+    __primary_key__ = ['order_id', 'product_id']
+    __incrementing__ = False
+    __fillable__ = ['order_id', 'product_id', 'quantity']
+
+    order_id: int
+    product_id: int
+    quantity: int = 1
+
+item = OrderItem(order_id=1, product_id=42, quantity=3)
+await item.save()
+
+# _get_key() returns a dict for composite keys
+key = item._get_key()  # {'order_id': 1, 'product_id': 42}
+
+await item.delete()    # DELETE WHERE order_id = 1 AND product_id = 42
+```
+
+### Hybrid Properties
+
+`@hybrid_property` works like a regular `@property` on model instances but can expose
+a SQL expression at the class level for use in raw WHERE / SELECT fragments.
+
+```python
+from pyloquent import hybrid_property
+from pyloquent.query.expression import RawExpression
+
+class User(Model):
+    first_name: str
+    last_name: str
+
+    @hybrid_property
+    def full_name(self) -> str:
+        return f'{self.first_name} {self.last_name}'
+
+    @full_name.expression
+    @classmethod
+    def full_name(cls):
+        return RawExpression("first_name || ' ' || last_name")
+
+# Instance access
+user = User(first_name='Jane', last_name='Doe')
+print(user.full_name)   # 'Jane Doe'
+
+# Class-level expression (for use in select_raw / where_raw)
+expr = User.full_name   # RawExpression("first_name || ' ' || last_name")
+```
+
+### TypeDecorator — Custom Column Types
+
+Register custom serialisation / deserialisation logic for any column.
+
+```python
+from pyloquent import TypeDecorator, register_type, JSONType, CommaSeparatedType
+
+# Built-in types — registered as 'json' and 'comma_separated'
+class Product(Model):
+    __casts__ = {
+        'metadata': 'json',           # dict ↔ JSON text
+        'tags':     'comma_separated', # list ↔ 'a,b,c' text
+    }
+    metadata: Optional[dict] = None
+    tags: Optional[list] = None
+
+# Custom type
+class UpperCaseType(TypeDecorator):
+    impl = 'TEXT'
+
+    def process_bind_param(self, value, dialect=None):
+        return value.upper() if value else value
+
+    def process_result_value(self, value, dialect=None):
+        return value.lower() if value else value
+
+register_type('upper', UpperCaseType())
+
+class Tag(Model):
+    __casts__ = {'slug': 'upper'}
+    slug: Optional[str] = None
+
+# TypeDecorator instances and subclasses are also accepted directly:
+class Log(Model):
+    __casts__ = {'payload': JSONType()}  # instance
+```
+
+### Identity Map
+
+`IdentityMap` ensures the same database row always produces the same Python object
+within a scope, preventing duplicate hydration.
+
+```python
+from pyloquent import IdentityMap
+
+# Manual usage
+imap = IdentityMap()
+u1 = await User.query.with_identity_map(imap).find(1)
+u2 = await User.query.with_identity_map(imap).find(1)
+assert u1 is u2   # True — cached after first query
+
+# Scoped session (recommended) — map is cleared on exit
+async with IdentityMap.session() as imap:
+    u1 = await User.query.with_identity_map(imap).find(1)
+    u2 = await User.query.with_identity_map(imap).find(1)
+    assert u1 is u2
+
+# Works with composite primary keys too
+imap.register(OrderItem, {'order_id': 1, 'product_id': 42}, item)
+cached = imap.get(OrderItem, {'order_id': 1, 'product_id': 42})
+assert cached is item
+```
+
+### Batch Insert
+
+Pass a list of dicts to `QueryBuilder.insert()` and Pyloquent automatically uses
+the driver's native `executemany` for bulk performance.
+
+```python
+# One executemany call instead of N separate execute() calls
+await Product.query.insert([
+    {'name': 'Widget A', 'price': 9.99},
+    {'name': 'Widget B', 'price': 19.99},
+    {'name': 'Widget C', 'price': 29.99},
+])
+
+# Single-dict insert continues to use the standard path
+await Product.query.insert({'name': 'Solo', 'price': 4.99})
+```
+
+### Sync Support
+
+For scripts, notebooks, CLI tools, or any context that cannot use `async/await`.
+
+```python
+from pyloquent.sync import run_sync, sync, SyncConnectionManager
+
+# Execute any coroutine synchronously
+user = run_sync(User.find(1))
+users = run_sync(User.where('active', True).order_by('name').get())
+
+# Decorator — wraps an async function into a sync one
+@sync
+async def get_users():
+    return await User.all()
+
+users = get_users()   # no await needed
+
+# Synchronous context manager
+with SyncConnectionManager({
+    'default': {'driver': 'sqlite', 'database': 'app.db'}
+}) as mgr:
+    users = mgr.table('users').where('active', True).get()
+    count = mgr.table('users').count()
+```
+
+### SQLite WAL Mode & Foreign Keys
+
+```python
+manager.add_connection('default', {
+    'driver': 'sqlite',
+    'database': 'app.db',
+    'journal_mode': 'wal',     # enable WAL for concurrent reads
+    'foreign_keys': True,      # default True; set False to disable FK enforcement
+}, default=True)
+```
+
+### Schema Reflection
+
+All grammars expose `compile_*` methods for introspecting the live database schema.
+Use them directly or via `D1BindingConnection`'s helper methods.
+
+```python
+grammar = SQLiteGrammar()
+
+sql = grammar.compile_get_tables()
+sql, b = grammar.compile_table_exists('users')
+sql, b = grammar.compile_column_exists('users', 'email')
+sql, b = grammar.compile_get_columns('orders')
+sql, b = grammar.compile_get_indexes('users')
+sql, b = grammar.compile_get_foreign_keys('orders')
+```
+
+---
+
+## Cloudflare D1 — Native Worker Binding
+
+Pyloquent supports two modes for Cloudflare D1:
+
+| Mode | Class | When to use |
+|------|-------|-------------|
+| HTTP API | `D1Connection` | External Python apps, scripts, CI pipelines |
+| Worker binding | `D1BindingConnection` | Python Workers on Cloudflare's runtime |
+
+### HTTP API (external apps)
+
+```python
+from pyloquent import ConnectionManager
+
+manager = ConnectionManager()
+manager.add_connection('default', {
+    'driver': 'd1',
+    'api_token':    'your-cloudflare-api-token',
+    'account_id':  'your-account-id',
+    'database_id': 'your-d1-database-id',
+}, default=True)
+await manager.connect()
+```
+
+### Native Worker Binding
+
+When running Python inside a Cloudflare Worker, the D1 binding (`self.env.DB`)
+is a JavaScript proxy object available through the Worker environment.  Python
+Workers require `compatibility_flags = ["python_workers"]` in `wrangler.jsonc`.
+
+#### `wrangler.jsonc`
+
+```jsonc
+{
+  "name": "my-pyloquent-worker",
+  "main": "src/entry.py",
+  "compatibility_flags": ["python_workers"],
+  "compatibility_date": "2026-04-08",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "YOUR_DB_NAME",
+      "database_id": "YOUR_DB_ID"
+    }
+  ]
+}
+```
+
+#### `src/entry.py`
+
+Python Workers use `WorkerEntrypoint` from the `workers` module (provided by
+the Cloudflare runtime).  The D1 binding is accessed via `self.env.DB` where
+`DB` matches the `binding` name in `wrangler.jsonc`.
+
+```python
+from workers import Response, WorkerEntrypoint
+from pyloquent import ConnectionManager, Model
+from pyloquent.database.manager import set_manager
+from typing import Optional
+
+class User(Model):
+    __table__ = 'users'
+    __fillable__ = ['name', 'email']
+    id: Optional[int] = None
+    name: str
+    email: str
+
+class Default(WorkerEntrypoint):
+    async def fetch(self, request):
+        # self.env.DB is the D1 binding — no HTTP credentials needed
+        manager = ConnectionManager.from_binding(self.env.DB)
+        set_manager(manager)
+
+        users = await User.where('active', True).order_by('name').get()
+        return Response.json(users.to_dict_list())
+```
+
+> **Note** — The official Python Workers D1 API uses `await stmt.run()` for
+> both SELECT and write queries.  Pyloquent’s `D1BindingConnection.fetch_all()`
+> calls `stmt.run()` as the primary path, exactly as shown in the
+> [Cloudflare docs](https://developers.cloudflare.com/d1/examples/query-d1-from-python-workers/).
+
+#### Manual construction
+
+```python
+from pyloquent.d1.binding import D1BindingConnection
+
+conn = D1BindingConnection(self.env.DB)
+await conn.connect()
+
+# QueryBuilder shortcut
+rows = await conn.table('users').where('active', True).get()
+```
+
+#### Batch writes (atomic)
+
+D1 Worker bindings do not support `BEGIN`/`COMMIT`.  Pyloquent implements
+transactions by accumulating statements and flushing them via `db.batch()`.
+
+```python
+async with manager.transaction():
+    await User.create({'name': 'Alice', 'email': 'alice@example.com'})
+    await Post.create({'user_id': 1, 'title': 'Hello'})
+# Both inserts sent in a single db.batch() call
+```
+
+Or use `conn.batch()` directly:
+
+```python
+results = await conn.batch([
+    ("INSERT INTO users (name) VALUES (?)", ["Alice"]),
+    ("INSERT INTO users (name) VALUES (?)", ["Bob"]),
+    ("SELECT COUNT(*) AS n FROM users", None),
+])
+count = results[-1][0]["n"]   # 2
+```
+
+#### execute_many via native batch
+
+```python
+conn = D1BindingConnection(self.env.DB)
+await conn.connect()
+
+await conn.execute_many(
+    "INSERT INTO products (name, price) VALUES (?, ?)",
+    [["Widget A", 9.99], ["Widget B", 19.99], ["Widget C", 29.99]],
+)
+# Sent as a single db.batch() — one round-trip
+```
+
+#### Database dump
+
+```python
+data = await conn.dump()   # bytes — full SQLite file
+with open('backup.sqlite', 'wb') as f:
+    f.write(data)
+```
+
+#### D1Statement — low-level prepared statements
+
+```python
+from pyloquent.d1.binding import D1Statement
+
+stmt = D1Statement(conn, "SELECT * FROM users WHERE id = ?").bind(1)
+rows  = await stmt.all()    # list of dicts
+row   = await stmt.first()  # dict or None
+count = await stmt.run()    # affected rows (int)
+```
+
+#### Schema reflection
+
+```python
+tables  = await conn.get_tables()
+exists  = await conn.table_exists('users')
+columns = await conn.get_columns('orders')
+indexes = await conn.get_indexes('users')
+fks     = await conn.get_foreign_keys('orders')
+```
+
+#### DDL via exec()
+
+```python
+await conn.exec("CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, msg TEXT)")
+```
+
+#### config-dict usage with ConnectionManager
+
+```python
+manager = ConnectionManager()
+manager.add_connection('default', {
+    'driver': 'd1_binding',
+    'binding': self.env.DB,     # the D1 binding from self.env
+}, default=True)
+await manager.connect()
+```
+
+---
+
 ## License
 
 Pyloquent is open-sourced software licensed under the MIT license.

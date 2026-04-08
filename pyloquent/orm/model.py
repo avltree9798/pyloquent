@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, PrivateAttr
 from pyloquent.exceptions import MassAssignmentException, ModelNotFoundException
 from pyloquent.orm.collection import Collection
 from pyloquent.orm.model_meta import ModelMeta
-from pyloquent.query.builder import QueryBuilder
+from pyloquent.query.builder import QueryBuilder, _UNSET
 
 T = TypeVar("T", bound="Model")
 
@@ -65,11 +65,13 @@ class Model(BaseModel, metaclass=ModelMeta):
     __casts__: ClassVar[Dict[str, str]] = {}
     __timestamps__: ClassVar[bool] = True
     __connection__: ClassVar[Optional[str]] = None
-    __primary_key__: ClassVar[str] = "id"
+    __primary_key__: ClassVar[Union[str, List[str]]] = "id"
     __incrementing__: ClassVar[bool] = True
     __key_type__: ClassVar[str] = "int"
     __with__: ClassVar[List[str]] = []
     __per_page__: ClassVar[int] = 15
+    __discriminator__: ClassVar[Optional[str]] = None
+    __discriminator_value__: ClassVar[Optional[Any]] = None
 
     # Event dispatcher reference (class-level)
     _dispatcher: ClassVar[Optional[Any]] = None
@@ -150,16 +152,25 @@ class Model(BaseModel, metaclass=ModelMeta):
 
         # Insert and get ID
         query = self._new_query()
-        id = await query.insert_get_id(attributes)
+        pk = self.__class__.__primary_key__
+        is_composite = isinstance(pk, list)
 
-        # Set ID on model
-        if id is not None and self.__primary_key__ in self.__class__.model_fields:
-            setattr(self, self.__primary_key__, id)
+        if is_composite:
+            # For composite PKs, just insert — no auto-increment ID retrieval
+            await query.insert(attributes)
+            id = None
+        else:
+            id = await query.insert_get_id(attributes, sequence=pk)
+
+            # Set ID on model
+            if id is not None and pk in self.__class__.model_fields:
+                setattr(self, pk, id)
 
         # Mark as existing and set original
         self._exists = True
         self._original = attributes.copy()
-        self._original[self.__primary_key__] = id
+        if not is_composite and id is not None:
+            self._original[pk] = id
 
         # Fire created event
         await self._fire_event("created")
@@ -189,8 +200,16 @@ class Model(BaseModel, metaclass=ModelMeta):
             if "updated_at" in self.__class__.model_fields:
                 dirty["updated_at"] = datetime.now()
 
-        # Update
-        query = self._new_query().where(self.__primary_key__, self._get_key())
+        # Update — handles both single and composite primary keys
+        query = self._new_query()
+        key = self._get_key()
+        pk = self.__class__.__primary_key__
+        if isinstance(pk, list):
+            assert isinstance(key, dict)
+            for col, val in key.items():
+                query = query.where(col, val)
+        else:
+            query = query.where(pk, key)
         await query.update(dirty)
 
         # Track changes
@@ -228,7 +247,14 @@ class Model(BaseModel, metaclass=ModelMeta):
         if key is None:
             return False
 
-        query = self._new_query().where(self.__primary_key__, key)
+        query = self._new_query()
+        pk = self.__class__.__primary_key__
+        if isinstance(pk, list):
+            assert isinstance(key, dict)
+            for col, val in key.items():
+                query = query.where(col, val)
+        else:
+            query = query.where(pk, key)
         await query.delete()
 
         self._exists = False
@@ -847,7 +873,11 @@ class Model(BaseModel, metaclass=ModelMeta):
 
         # Remove the primary key if it's None (auto-increment)
         pk = self.__primary_key__
-        if pk in attributes and attributes[pk] is None:
+        if isinstance(pk, list):
+            for k in pk:
+                if k in attributes and attributes[k] is None:
+                    del attributes[k]
+        elif pk in attributes and attributes[pk] is None:
             del attributes[pk]
 
         # Apply casting for storage
@@ -863,10 +893,16 @@ class Model(BaseModel, metaclass=ModelMeta):
     def _get_key(self) -> Any:
         """Get the primary key value.
 
+        For composite primary keys, returns a dict mapping each key column to its value.
+        For single primary keys, returns the scalar value.
+
         Returns:
-            Primary key value
+            Primary key value (scalar or dict for composite keys)
         """
-        return getattr(self, self.__primary_key__, None)
+        pk = self.__class__.__primary_key__
+        if isinstance(pk, list):
+            return {col: getattr(self, col, None) for col in pk}
+        return getattr(self, pk, None)
 
     def _get_key_name(self) -> str:
         """Get the primary key column name.
@@ -1158,7 +1194,7 @@ class Model(BaseModel, metaclass=ModelMeta):
 
     @classmethod
     def where(
-        cls: Type[T], column: str, operator: Any = None, value: Any = None
+        cls: Type[T], column: str, operator: Any = None, value: Any = _UNSET
     ) -> QueryBuilder[T]:
         """Start a query with a where clause.
 
@@ -1676,6 +1712,12 @@ class Model(BaseModel, metaclass=ModelMeta):
 
         cast_type = self.__casts__[key]
 
+        # TypeDecorator support — checked first
+        from pyloquent.orm.type_decorator import get_type as _get_type
+        custom = _get_type(cast_type)
+        if custom is not None:
+            return custom.process_result_value(value)
+
         if cast_type == "json":
             import json
 
@@ -1723,6 +1765,12 @@ class Model(BaseModel, metaclass=ModelMeta):
             return value
 
         cast_type = self.__casts__[key]
+
+        # TypeDecorator support — checked first
+        from pyloquent.orm.type_decorator import get_type as _get_type
+        custom = _get_type(cast_type)
+        if custom is not None:
+            return custom.process_bind_param(value)
 
         if cast_type == "json":
             import json

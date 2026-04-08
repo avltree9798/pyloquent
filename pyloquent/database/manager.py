@@ -116,6 +116,16 @@ class ConnectionManager:
             from pyloquent.d1.connection import D1Connection
 
             return D1Connection(config)
+        elif driver == "d1_binding":
+            from pyloquent.d1.binding import D1BindingConnection
+
+            binding = config.get("binding")
+            if binding is None:
+                raise PyloquentException(
+                    "d1_binding driver requires a 'binding' key in the config "
+                    "(pass the env.DB binding object)"
+                )
+            return D1BindingConnection(binding, config)
         else:
             raise PyloquentException(f"Unsupported database driver: {driver}")
 
@@ -206,6 +216,17 @@ class ConnectionManager:
         """
         return self
 
+    async def connect_all(self) -> None:
+        """Alias for :meth:`connect` with no arguments — connects every configured connection.
+
+        Useful in scripts and sync wrappers where the method name is more explicit.
+        """
+        await self.connect()
+
+    async def disconnect_all(self) -> None:
+        """Alias for :meth:`disconnect` with no arguments — closes every connection."""
+        await self.disconnect()
+
     async def __aenter__(self):
         """Async context manager entry - connect to all databases."""
         await self.connect()
@@ -214,6 +235,43 @@ class ConnectionManager:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit - disconnect from all databases."""
         await self.disconnect()
+
+    @classmethod
+    def from_binding(cls, binding: Any, name: str = "default") -> "ConnectionManager":
+        """Create a :class:`ConnectionManager` pre-configured for a D1 Workers binding.
+
+        Convenience factory for Cloudflare Worker handlers where the D1 binding
+        (``env.DB``) is the only connection needed.
+
+        Args:
+            binding: The D1 binding object (``env.DB`` from the Worker environment).
+            name: Connection name (default: ``'default'``).
+
+        Returns:
+            A new :class:`ConnectionManager` with the binding registered **and
+            already marked as connected** (no ``await manager.connect()`` needed).
+
+        Example::
+
+            # worker.py
+            from pyloquent.database.manager import ConnectionManager, set_manager
+
+            async def on_fetch(request, env):
+                manager = ConnectionManager.from_binding(env.DB)
+                set_manager(manager)
+                users = await User.where('active', True).get()
+                ...
+        """
+        from pyloquent.d1.binding import D1BindingConnection
+
+        manager = cls()
+        conn = D1BindingConnection(binding)
+        # Mark as connected synchronously — no I/O required for binding setup
+        conn._connected = True
+        manager._configs[name] = {"driver": "d1_binding", "binding": binding}
+        manager._connections[name] = conn
+        manager._default = name
+        return manager
 
 
 # Global connection manager instance

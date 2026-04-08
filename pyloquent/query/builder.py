@@ -36,6 +36,8 @@ if TYPE_CHECKING:  # pragma: no cover
 T = TypeVar("T")
 ModelType = TypeVar("ModelType", bound="Model")
 
+_UNSET = object()
+
 
 class QueryBuilder(Generic[T]):
     """Query builder with synchronous state mutation and async execution.
@@ -106,6 +108,12 @@ class QueryBuilder(Generic[T]):
 
         # Locking
         self._lock: Optional[str] = None
+
+        # CTEs (Common Table Expressions)
+        self._ctes: List[Any] = []
+
+        # Identity map (optional per-query/per-session row cache)
+        self._identity_map: Optional[Any] = None
 
     # ========================================================================
     # Table Selection
@@ -199,7 +207,7 @@ class QueryBuilder(Generic[T]):
         self,
         column: Union[str, Callable[["QueryBuilder[T]"], None], dict],
         operator: Any = None,
-        value: Any = None,
+        value: Any = _UNSET,
         boolean: str = "and",
     ) -> "QueryBuilder[T]":
         """Add a WHERE clause.
@@ -217,6 +225,7 @@ class QueryBuilder(Generic[T]):
             query.where('age', '>', 18)
             query.where({'name': 'John', 'active': True})
             query.where(lambda q: q.where('a', 1).or_where('b', 2))
+            query.where('deleted_at', None)  # → WHERE deleted_at IS NULL
         """
         # Handle dict of conditions
         if isinstance(column, dict):
@@ -226,8 +235,12 @@ class QueryBuilder(Generic[T]):
         if callable(column):
             return self._where_nested(column, boolean)
 
-        # Handle 2-argument form (where('name', 'John') - implied =)
-        if value is None and operator is not None:
+        # Handle 2-argument form — value was not supplied at all
+        if value is _UNSET:
+            if operator is None:
+                # where('col', None) → WHERE col IS NULL
+                return self.where_null(column, boolean=boolean)
+            # where('col', val) → implied =
             value = operator
             operator = "="
 
@@ -250,7 +263,7 @@ class QueryBuilder(Generic[T]):
         self,
         column: Union[str, Callable[["QueryBuilder[T]"], None]],
         operator: Any = None,
-        value: Any = None,
+        value: Any = _UNSET,
     ) -> "QueryBuilder[T]":
         """Add an OR WHERE clause.
 
@@ -620,6 +633,327 @@ class QueryBuilder(Generic[T]):
             Self for chaining
         """
         self._joins.append(JoinClause(table=table, type="cross"))
+        return self
+
+    def full_join(
+        self, table: str, first: str, operator: str = None, second: str = None
+    ) -> "QueryBuilder[T]":
+        """Add a FULL OUTER JOIN clause.
+
+        Args:
+            table: Table to join
+            first: First column
+            operator: Comparison operator or second column
+            second: Second column
+
+        Returns:
+            Self for chaining
+        """
+        return self.join(table, first, operator, second, type="full outer")
+
+    def join_raw(self, sql: str, bindings: Optional[List[Any]] = None) -> "QueryBuilder[T]":
+        """Add a raw JOIN clause.
+
+        Args:
+            sql: Raw JOIN SQL (e.g. 'LEFT JOIN audit_log ON audit_log.user_id = users.id')
+            bindings: Optional parameter bindings
+
+        Returns:
+            Self for chaining
+
+        Example:
+            query.join_raw('LEFT JOIN orders o ON o.user_id = users.id AND o.active = ?', [1])
+        """
+        from pyloquent.query.expression import JoinRaw
+        self._joins.append(JoinRaw(sql=sql, bindings=bindings or []))
+        return self
+
+    def join_sub(
+        self,
+        query: Union["QueryBuilder", Callable[["QueryBuilder"], None]],
+        alias: str,
+        first: str,
+        operator: str,
+        second: str,
+        type: str = "inner",
+    ) -> "QueryBuilder[T]":
+        """Join against a subquery.
+
+        Args:
+            query: Subquery builder or callback that receives a builder
+            alias: Alias for the subquery
+            first: Column from the outer query to join on
+            operator: Comparison operator
+            second: Column from the subquery to join on
+            type: Join type (inner, left, right)
+
+        Returns:
+            Self for chaining
+
+        Example:
+            User.query.join_sub(
+                lambda q: q.from_('orders').select('user_id').where('status', 'paid'),
+                alias='paid_orders',
+                first='users.id',
+                operator='=',
+                second='paid_orders.user_id',
+            ).get()
+        """
+        from pyloquent.query.expression import SubqueryJoin
+
+        if callable(query) and not isinstance(query, QueryBuilder):
+            sub = QueryBuilder(self.grammar, self.connection)
+            query(sub)
+            query = sub
+
+        self._joins.append(
+            SubqueryJoin(
+                subquery=query,
+                alias=alias,
+                first=first,
+                operator=operator,
+                second=second,
+                type=type,
+            )
+        )
+        return self
+
+    def left_join_sub(
+        self,
+        query: Union["QueryBuilder", Callable[["QueryBuilder"], None]],
+        alias: str,
+        first: str,
+        operator: str,
+        second: str,
+    ) -> "QueryBuilder[T]":
+        """Left join against a subquery.
+
+        Args:
+            query: Subquery builder or callback
+            alias: Alias for the subquery
+            first: Column from the outer query
+            operator: Comparison operator
+            second: Column from the subquery
+
+        Returns:
+            Self for chaining
+        """
+        return self.join_sub(query, alias, first, operator, second, type="left")
+
+    def join_on(
+        self,
+        table: str,
+        callback: Callable[[JoinClause], None],
+        type: str = "inner",
+    ) -> "QueryBuilder[T]":
+        """Add a JOIN with a complex ON clause built via callback.
+
+        Args:
+            table: Table to join
+            callback: Callback receiving a JoinClause to add conditions
+            type: Join type
+
+        Returns:
+            Self for chaining
+
+        Example:
+            User.query.join_on('orders', lambda j: (
+                j.on('orders.user_id', '=', 'users.id')
+                 .or_on('orders.alt_id', '=', 'users.id')
+            )).get()
+        """
+        join = JoinClause(table=table, type=type)
+        callback(join)
+        self._joins.append(join)
+        return self
+
+    # ========================================================================
+    # Identity Map
+    # ========================================================================
+
+    def with_identity_map(self, identity_map: Any) -> "QueryBuilder[T]":
+        """Attach an identity map to this query.
+
+        When set, hydrated model instances are looked up and stored in the
+        identity map so the same database row always maps to the same Python
+        object within the map's scope.
+
+        Args:
+            identity_map: An :class:`~pyloquent.orm.identity_map.IdentityMap` instance.
+
+        Returns:
+            Self for chaining
+
+        Example::
+
+            async with IdentityMap.session() as imap:
+                users = await User.query.with_identity_map(imap).get()
+        """
+        self._identity_map = identity_map
+        return self
+
+    # ========================================================================
+    # CTEs (Common Table Expressions)
+    # ========================================================================
+
+    def with_cte(
+        self,
+        name: str,
+        query: Union["QueryBuilder", Callable[["QueryBuilder"], None]],
+    ) -> "QueryBuilder[T]":
+        """Add a Common Table Expression (WITH clause).
+
+        Args:
+            name: CTE name — referenced in the main query's FROM or JOIN
+            query: Subquery builder or callback that configures it
+
+        Returns:
+            Self for chaining
+
+        Example:
+            await (
+                User.query
+                .with_cte('active_users',
+                    lambda q: q.from_('users').where('active', True))
+                .from_('active_users')
+                .get()
+            )
+        """
+        from pyloquent.query.expression import CteClause
+
+        if callable(query) and not isinstance(query, QueryBuilder):
+            sub = QueryBuilder(self.grammar, self.connection)
+            query(sub)
+            query = sub
+
+        self._ctes.append(CteClause(name=name, query=query, recursive=False))
+        return self
+
+    def with_recursive_cte(
+        self,
+        name: str,
+        base: Union["QueryBuilder", Callable[["QueryBuilder"], None]],
+        recursive: Union["QueryBuilder", Callable[["QueryBuilder"], None]],
+        union_all: bool = True,
+    ) -> "QueryBuilder[T]":
+        """Add a recursive Common Table Expression (WITH RECURSIVE).
+
+        The final CTE query is composed as ``base UNION ALL recursive``
+        (or ``UNION`` when union_all=False).
+
+        Args:
+            name: CTE name
+            base: Base-case subquery
+            recursive: Recursive-step subquery
+            union_all: Use UNION ALL (default) vs UNION
+
+        Returns:
+            Self for chaining
+
+        Example:
+            await (
+                Category.query
+                .with_recursive_cte(
+                    'tree',
+                    lambda q: q.from_('categories').where('parent_id', None),
+                    lambda q: q.from_('categories')
+                               .join('tree', 'tree.id', '=', 'categories.parent_id'),
+                )
+                .from_('tree')
+                .get()
+            )
+        """
+        from pyloquent.query.expression import CteClause, RawExpression
+
+        if callable(base) and not isinstance(base, QueryBuilder):
+            sub_base = QueryBuilder(self.grammar, self.connection)
+            base(sub_base)
+            base = sub_base
+
+        if callable(recursive) and not isinstance(recursive, QueryBuilder):
+            sub_rec = QueryBuilder(self.grammar, self.connection)
+            recursive(sub_rec)
+            recursive = sub_rec
+
+        # Compose as a single builder: base UNION [ALL] recursive
+        union_keyword = "UNION ALL" if union_all else "UNION"
+        base_sql, base_bindings = self.grammar.compile_select(base)
+        rec_sql, rec_bindings = self.grammar.compile_select(recursive)
+
+        composed = QueryBuilder(self.grammar, self.connection)
+        composed._table = "(recursive)"
+        composed._selects = [
+            RawExpression(f"{base_sql} {union_keyword} {rec_sql}", base_bindings + rec_bindings)
+        ]
+
+        self._ctes.append(CteClause(name=name, query=composed, recursive=True))
+        return self
+
+    # ========================================================================
+    # Window Functions
+    # ========================================================================
+
+    def select_window(
+        self,
+        function: str,
+        *args: Any,
+        partition_by: Optional[List[str]] = None,
+        order_by: Optional[List[Any]] = None,
+        frame: Optional[Any] = None,
+        alias: Optional[str] = None,
+    ) -> "QueryBuilder[T]":
+        """Add a window function to the SELECT clause.
+
+        Args:
+            function: Window function name (ROW_NUMBER, RANK, DENSE_RANK, SUM, AVG, etc.)
+            *args: Function arguments (column names)
+            partition_by: PARTITION BY columns
+            order_by: ORDER BY clauses (list of column names or OrderClause instances)
+            frame: WindowFrame instance for ROWS/RANGE framing
+            alias: Column alias for the window expression
+
+        Returns:
+            Self for chaining
+
+        Examples:
+            # Row number per department
+            User.query.select_window(
+                'ROW_NUMBER',
+                partition_by=['department'],
+                order_by=['salary'],
+                alias='row_num',
+            )
+
+            # Running total
+            Order.query.select_window(
+                'SUM', 'amount',
+                order_by=['created_at'],
+                alias='running_total',
+            )
+        """
+        from pyloquent.query.expression import OrderClause as OC, RawExpression, WindowFrame
+
+        order_clauses = []
+        for o in (order_by or []):
+            if isinstance(o, OC):
+                order_clauses.append(o)
+            elif isinstance(o, str):
+                order_clauses.append(OC(column=o, direction="asc"))
+
+        sql_expr, _ = self.grammar.compile_window_expression(
+            function=function,
+            args=list(args),
+            partition_by=partition_by,
+            order_by=order_clauses,
+            frame=frame,
+            alias=alias,
+        )
+
+        if not self._selects:
+            table = self._table or "*"
+            self._selects.append(RawExpression(f"{table}.*" if "*" not in table else "*"))
+
+        self._selects.append(RawExpression(sql_expr))
         return self
 
     # ========================================================================
@@ -1382,11 +1716,29 @@ class QueryBuilder(Generic[T]):
 
         # Hydrate result if model class is set
         if self.model_class:
-            model = self.model_class(**result)
+            casted = self._cast_row(result)
+            known = {k: v for k, v in casted.items() if k in self.model_class.model_fields}
+
+            # Identity map: return cached instance if present
+            imap = self._identity_map
+            row_key: Any = None
+            if imap is not None:
+                pk_attr = getattr(self.model_class, "__primary_key__", "id")
+                if isinstance(pk_attr, list):
+                    row_key = {col: result.get(col) for col in pk_attr}
+                else:
+                    row_key = result.get(pk_attr)
+                cached = imap.get(self.model_class, row_key)
+                if cached is not None:
+                    return cached
+
+            model = self.model_class(**known)
             if hasattr(model, "_exists"):
                 model._exists = True
             if hasattr(model, "_original"):
                 model._original = result.copy()
+            if imap is not None and row_key is not None:
+                imap.register(self.model_class, row_key, model)
             if hasattr(model, "_fire_event"):
                 try:
                     import asyncio
@@ -1520,6 +1872,10 @@ class QueryBuilder(Generic[T]):
     async def insert(self, values: Union[Dict[str, Any], List[Dict[str, Any]]]) -> bool:
         """Insert records into the database.
 
+        For a single row, compiles a standard INSERT and calls execute().
+        For multiple rows, uses execute_many() for native batch performance
+        (aiosqlite executemany / asyncpg executemany / aiomysql executemany).
+
         Args:
             values: Dictionary or list of dictionaries of column-value pairs
 
@@ -1532,12 +1888,22 @@ class QueryBuilder(Generic[T]):
         if not values:
             raise ValueError("Cannot insert empty values")
 
-        sql, bindings = self.grammar.compile_insert(self, values)
-
         if not self.connection:
             raise QueryException("No database connection available")
 
-        await self.connection.execute(sql, bindings)
+        if len(values) == 1:
+            sql, bindings = self.grammar.compile_insert(self, values)
+            await self.connection.execute(sql, bindings)
+        else:
+            # Build a single-row template and batch via execute_many
+            columns = list(values[0].keys())
+            columns_sql = ", ".join(self.grammar._wrap_column(c) for c in columns)
+            placeholder_row = f"({', '.join(self.grammar._parameter(None) for _ in columns)})"
+            table = self.grammar._wrap_table(self._table)
+            template_sql = f"INSERT INTO {table} ({columns_sql}) VALUES {placeholder_row}"
+            rows = [[row[col] for col in columns] for row in values]
+            await self.connection.execute_many(template_sql, rows)
+
         return True
 
     async def insert_get_id(self, values: Dict[str, Any], sequence: str = "id") -> Any:
@@ -2068,7 +2434,38 @@ class QueryBuilder(Generic[T]):
         new_builder._offset = self._offset
         new_builder._lock = self._lock
         new_builder._bindings = {k: v.copy() for k, v in self._bindings.items()}
+        new_builder._ctes = self._ctes.copy()
+        new_builder._identity_map = self._identity_map
+        new_builder._eager_loads = self._eager_loads.copy()
+        new_builder._scopes = self._scopes.copy()
+        new_builder._removed_scopes = self._removed_scopes.copy()
+        new_builder._cache_key = self._cache_key
+        new_builder._cache_ttl = self._cache_ttl
+        new_builder._cache_tags = self._cache_tags.copy()
         return new_builder
+
+    def _cast_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply __casts__ TypeDecorators to a raw database result row.
+
+        Args:
+            row: Raw column dict from the database.
+
+        Returns:
+            New dict with cast values applied.
+        """
+        if not self.model_class:
+            return row
+        casts = getattr(self.model_class, "__casts__", {})
+        if not casts:
+            return row
+        from pyloquent.orm.type_decorator import get_type as _get_type
+        out = dict(row)
+        for key, cast_spec in casts.items():
+            if key in out and out[key] is not None:
+                custom = _get_type(cast_spec)
+                if custom is not None:
+                    out[key] = custom.process_result_value(out[key])
+        return out
 
     def _hydrate_models(self, results: List[Dict[str, Any]]) -> "Collection[T]":
         """Hydrate raw results into model instances.
@@ -2086,17 +2483,37 @@ class QueryBuilder(Generic[T]):
 
         import asyncio
         model_field_names = set(self.model_class.model_fields.keys())
+        pk_attr = getattr(self.model_class, "__primary_key__", "id")
         models = []
         for result in results:
             known = {k: v for k, v in result.items() if k in model_field_names}
             extras = {k: v for k, v in result.items() if k not in model_field_names}
-            model = self.model_class(**known)
-            if hasattr(model, "_exists"):
-                model._exists = True
-            if hasattr(model, "_original"):
-                model._original = result.copy()
-            for key, val in extras.items():
-                object.__setattr__(model, key, val)
+
+            # Identity map lookup before construction
+            imap = self._identity_map
+            cached_model = None
+            row_key: Any = None
+            if imap is not None:
+                if isinstance(pk_attr, list):
+                    row_key = {col: result.get(col) for col in pk_attr}
+                else:
+                    row_key = result.get(pk_attr)
+                cached_model = imap.get(self.model_class, row_key)
+
+            if cached_model is not None:
+                model = cached_model
+            else:
+                casted_known = self._cast_row(known)
+                model = self.model_class(**casted_known)
+                if hasattr(model, "_exists"):
+                    model._exists = True
+                if hasattr(model, "_original"):
+                    model._original = result.copy()
+                for key, val in extras.items():
+                    object.__setattr__(model, key, val)
+                if imap is not None and row_key is not None:
+                    imap.register(self.model_class, row_key, model)
+
             models.append(model)
 
         # Fire retrieved events (best-effort, non-blocking)

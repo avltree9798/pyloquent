@@ -68,6 +68,13 @@ class Grammar(ABC):
         sql_parts = []
         bindings = []
 
+        # WITH (CTEs)
+        ctes = getattr(query, "_ctes", [])
+        if ctes:
+            cte_sql, cte_bindings = self._compile_ctes(query)
+            sql_parts.append(cte_sql)
+            bindings.extend(cte_bindings)
+
         # SELECT columns
         columns = self._compile_columns(query)
         if columns:
@@ -268,6 +275,80 @@ class Grammar(ABC):
         """
         return f"FROM {self._wrap_table(query._table)}"
 
+    def _compile_ctes(self, query: "QueryBuilder") -> Tuple[str, List[Any]]:
+        """Compile WITH (Common Table Expression) clauses.
+
+        Args:
+            query: The query builder instance
+
+        Returns:
+            Tuple of (SQL WITH clause, bindings list)
+        """
+        from pyloquent.query.expression import CteClause
+
+        ctes = getattr(query, "_ctes", [])
+        if not ctes:
+            return "", []
+
+        parts = []
+        bindings: List[Any] = []
+        has_recursive = any(c.recursive for c in ctes)
+        prefix = "WITH RECURSIVE" if has_recursive else "WITH"
+
+        for cte in ctes:
+            sub_sql, sub_bindings = self.compile_select(cte.query)
+            bindings.extend(sub_bindings)
+            parts.append(f"{self._wrap_table(cte.name)} AS ({sub_sql})")
+
+        return f"{prefix} {', '.join(parts)}", bindings
+
+    def compile_window_expression(
+        self,
+        function: str,
+        args: List[Any],
+        partition_by: Optional[List[str]] = None,
+        order_by: Optional[List[Any]] = None,
+        frame: Optional[Any] = None,
+        alias: Optional[str] = None,
+    ) -> Tuple[str, List[Any]]:
+        """Compile a window function expression.
+
+        Args:
+            function: Window function name (e.g. ROW_NUMBER, RANK, SUM)
+            args: Function arguments
+            partition_by: PARTITION BY columns
+            order_by: ORDER BY clauses
+            frame: Window frame specification
+            alias: Optional column alias
+
+        Returns:
+            Tuple of (SQL expression, bindings list)
+        """
+        func_args = ", ".join(self._wrap_column(a) if isinstance(a, str) else str(a) for a in args) if args else ""
+        func_sql = f"{function.upper()}({func_args})"
+
+        over_parts = []
+        if partition_by:
+            cols = ", ".join(self._wrap_column(c) for c in partition_by)
+            over_parts.append(f"PARTITION BY {cols}")
+        if order_by:
+            from pyloquent.query.expression import OrderClause
+            orders = []
+            for o in order_by:
+                if isinstance(o, OrderClause):
+                    orders.append(f"{self._wrap_column(o.column)} {o.direction.upper()}")
+                else:
+                    orders.append(str(o))
+            over_parts.append(f"ORDER BY {', '.join(orders)}")
+        if frame:
+            over_parts.append(f"{frame.mode} BETWEEN {frame.start} AND {frame.end}")
+
+        over_sql = f"OVER ({' '.join(over_parts)})"
+        expr = f"{func_sql} {over_sql}"
+        if alias:
+            expr = f"{expr} AS {self._wrap_column(alias)}"
+        return expr, []
+
     def _compile_joins(self, query: "QueryBuilder") -> Tuple[str, List[Any]]:
         """Compile the JOIN clauses.
 
@@ -277,21 +358,46 @@ class Grammar(ABC):
         Returns:
             Tuple of (SQL joins clause, bindings list)
         """
+        from pyloquent.query.expression import JoinRaw, SubqueryJoin
+
         sql_parts = []
         bindings = []
 
         for join in query._joins:
+            if isinstance(join, JoinRaw):
+                sql_parts.append(join.sql)
+                bindings.extend(join.bindings)
+                continue
+
+            if isinstance(join, SubqueryJoin):
+                sub_sql, sub_bindings = self.compile_select(join.subquery)
+                bindings.extend(sub_bindings)
+                first = self._wrap_column(join.first)
+                second = self._wrap_column(join.second)
+                alias = self._wrap_table(join.alias)
+                join_type = join.type.upper()
+                sql_parts.append(
+                    f"{join_type} JOIN ({sub_sql}) AS {alias} ON {first} {join.operator} {second}"
+                )
+                continue
+
             join_type = join.type.upper()
             table = self._wrap_table(join.table)
 
-            conditions = []
-            for condition in join.conditions:
+            if not join.conditions and join_type == "CROSS":
+                sql_parts.append(f"CROSS JOIN {table}")
+                continue
+
+            condition_parts = []
+            for i, condition in enumerate(join.conditions):
                 first = self._wrap_column(condition.first)
                 second = self._wrap_column(condition.second)
                 operator = condition.operator
-                conditions.append(f"{first} {operator} {second}")
+                boolean = "AND" if condition.boolean == "and" else "OR"
+                prefix = f" {boolean} " if i > 0 else ""
+                condition_parts.append(f"{prefix}{first} {operator} {second}")
 
-            conditions_sql = " AND ".join(conditions)
+            conditions_sql = "".join(condition_parts)
             sql_parts.append(f"{join_type} JOIN {table} ON {conditions_sql}")
 
         return " ".join(sql_parts), bindings

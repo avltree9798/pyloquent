@@ -1,7 +1,7 @@
 """Query expression classes for building SQL queries."""
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union
 
 if TYPE_CHECKING:  # pragma: no cover
     from pyloquent.query.builder import QueryBuilder
@@ -54,6 +54,32 @@ class JoinClause:
         """
         self.conditions.append(JoinCondition(first, operator, second, boolean))
         return self
+
+    def on(self, first: str, operator: str, second: str) -> "JoinClause":
+        """Add an AND ON condition.
+
+        Args:
+            first: First column
+            operator: Comparison operator
+            second: Second column
+
+        Returns:
+            Self for chaining
+        """
+        return self.add_condition(first, operator, second, boolean="and")
+
+    def or_on(self, first: str, operator: str, second: str) -> "JoinClause":
+        """Add an OR ON condition.
+
+        Args:
+            first: First column
+            operator: Comparison operator
+            second: Second column
+
+        Returns:
+            Self for chaining
+        """
+        return self.add_condition(first, operator, second, boolean="or")
 
 
 @dataclass
@@ -110,3 +136,54 @@ class RawExpression:
 
     sql: str
     bindings: List[Any] = field(default_factory=list)
+
+
+@dataclass
+class CteClause:
+    """Represents a Common Table Expression (WITH clause)."""
+
+    name: str
+    query: "QueryBuilder"
+    recursive: bool = False
+    recursive_union_all: bool = True
+
+
+@dataclass
+class WindowFrame:
+    """Represents a window frame specification (ROWS/RANGE BETWEEN ...)."""
+
+    mode: str = "ROWS"  # "ROWS" or "RANGE" or "GROUPS"
+    start: str = "UNBOUNDED PRECEDING"
+    end: str = "CURRENT ROW"
+
+
+@dataclass
+class WindowExpression:
+    """Represents an OVER () window function expression."""
+
+    function: str
+    args: List[Any] = field(default_factory=list)
+    partition_by: List[str] = field(default_factory=list)
+    order_by: List["OrderClause"] = field(default_factory=list)
+    frame: Optional[WindowFrame] = None
+    alias: Optional[str] = None
+
+
+@dataclass
+class JoinRaw:
+    """Represents a raw JOIN clause."""
+
+    sql: str
+    bindings: List[Any] = field(default_factory=list)
+
+
+@dataclass
+class SubqueryJoin:
+    """Represents a subquery JOIN clause."""
+
+    subquery: "QueryBuilder"
+    alias: str
+    first: str
+    operator: str
+    second: str
+    type: str = "inner"

@@ -34,10 +34,20 @@ class ModelMeta(PydanticModelMetaclass):
         timestamps = namespace.get("__timestamps__", True)
         connection = namespace.get("__connection__")
         primary_key = namespace.get("__primary_key__", "id")
+        discriminator = namespace.get("__discriminator__")
+        discriminator_value = namespace.get("__discriminator_value__")
 
         # Auto-infer table name if not specified
         if table_name is None:
-            table_name = mcs._get_table_name(name)
+            # STI: inherit parent model's table when discriminator is set
+            if discriminator or discriminator_value is not None:
+                for base in bases:
+                    parent_table = getattr(base, "__table__", None)
+                    if parent_table and base.__name__ not in ("Model", "BaseModel"):
+                        table_name = parent_table
+                        break
+            if table_name is None:
+                table_name = mcs._get_table_name(name)
 
         # Store metadata on the class
         namespace["_pyloquent_meta"] = {
@@ -62,6 +72,16 @@ class ModelMeta(PydanticModelMetaclass):
             if base.__name__ == "SoftDeletes" and hasattr(cls, "boot_soft_deletes"):
                 cls.boot_soft_deletes()
                 break
+
+        # Auto-register STI discriminator scope
+        if discriminator and discriminator_value is not None:
+            if not hasattr(cls, "_global_scopes"):
+                cls._global_scopes = {}
+            _disc_col = discriminator
+            _disc_val = discriminator_value
+            cls._global_scopes[f"sti_{_disc_col}"] = (
+                lambda q, col=_disc_col, val=_disc_val: q.where(col, val)
+            )
 
         return cls
 
@@ -132,6 +152,17 @@ class ModelMeta(PydanticModelMetaclass):
         if hasattr(cls, "_global_scopes"):
             for scope_name, callback in cls._global_scopes.items():
                 builder.with_global_scope(scope_name, callback)
+
+        # STI: apply discriminator scope when __discriminator_value__ is set
+        disc = getattr(cls, "__discriminator__", None)
+        disc_val = getattr(cls, "__discriminator_value__", None)
+        if disc and disc_val is not None:
+            _col = disc
+            _val = disc_val
+            builder.with_global_scope(
+                f"sti_{_col}",
+                lambda q, col=_col, val=_val: q.where(col, val),
+            )
 
         return builder
 

@@ -31,13 +31,17 @@ class SQLiteConnection(Connection):
         Args:
             config: Configuration dictionary with keys:
                 - database: Path to database file or ':memory:'
-                - timeout: Connection timeout (optional)
-                - isolation_level: Transaction isolation level (optional)
+                - timeout: Connection timeout in seconds (default: 5.0)
+                - isolation_level: Transaction isolation level (default: None / autocommit)
+                - journal_mode: SQLite journal mode — 'wal' recommended for concurrency
+                - foreign_keys: Enable FK enforcement (default: True)
         """
         super().__init__(config)
         self._db_path = config.get("database", ":memory:")
         self._timeout = config.get("timeout", 5.0)
         self._isolation_level = config.get("isolation_level", None)
+        self._journal_mode = config.get("journal_mode", None)
+        self._foreign_keys = config.get("foreign_keys", True)
         self._connection = None
         self._in_transaction = False
 
@@ -56,10 +60,14 @@ class SQLiteConnection(Connection):
                 isolation_level=self._isolation_level,
                 detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
             )
-            # Enable foreign keys
-            await self._connection.execute("PRAGMA foreign_keys = ON")
             # Return rows as dictionaries
             self._connection.row_factory = aiosqlite.Row
+            # Foreign key enforcement
+            fk_val = "ON" if self._foreign_keys else "OFF"
+            await self._connection.execute(f"PRAGMA foreign_keys = {fk_val}")
+            # Journal mode (WAL is recommended for concurrent reads)
+            if self._journal_mode:
+                await self._connection.execute(f"PRAGMA journal_mode = {self._journal_mode.upper()}")
             self._connected = True
         except Exception as e:
             raise ConnectionError(f"Failed to connect to SQLite database: {e}")
@@ -140,6 +148,31 @@ class SQLiteConnection(Connection):
             return dict(row) if row else None
         except Exception as e:
             raise QueryException(f"Query execution failed: {e}", sql, bindings)
+
+    async def execute_many(self, sql: str, rows: List[List[Any]]) -> int:
+        """Execute a parameterised statement for multiple rows using aiosqlite executemany.
+
+        This is significantly faster than individual execute() calls for bulk inserts.
+
+        Args:
+            sql: SQL statement with ? placeholders
+            rows: List of binding lists, one per row
+
+        Returns:
+            Total number of rows affected
+        """
+        if not self._connection:
+            from pyloquent.exceptions import QueryException
+            raise QueryException("Not connected to database")
+
+        try:
+            await self._connection.executemany(sql, rows)
+            if not self._in_transaction:
+                await self._connection.commit()
+            return len(rows)
+        except Exception as e:
+            from pyloquent.exceptions import QueryException
+            raise QueryException(f"Batch insert failed: {e}", sql)
 
     def get_grammar(self) -> "Grammar":
         """Get SQLite grammar instance.

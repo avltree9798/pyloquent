@@ -65,6 +65,25 @@ class Connection(ABC):
         """
         pass
 
+    async def execute_many(self, sql: str, rows: List[List[Any]]) -> int:
+        """Execute a parameterised statement for multiple rows (batch insert).
+
+        The default implementation falls back to executing one row at a time.
+        Driver subclasses should override this with native executemany support.
+
+        Args:
+            sql: SQL statement with placeholders
+            rows: List of binding lists, one per row
+
+        Returns:
+            Total number of rows affected
+        """
+        count = 0
+        for row in rows:
+            await self.execute(sql, row)
+            count += 1
+        return count
+
     @abstractmethod
     async def fetch_all(
         self, sql: str, bindings: Optional[List[Any]] = None

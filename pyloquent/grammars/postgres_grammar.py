@@ -1,6 +1,6 @@
 """PostgreSQL grammar implementation."""
 
-from typing import TYPE_CHECKING, Any, List, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 from pyloquent.grammars.grammar import Grammar
 
@@ -117,3 +117,123 @@ class PostgresGrammar(Grammar):
             True if ILIKE is supported
         """
         return True
+
+    # ========================================================================
+    # Schema Reflection
+    # ========================================================================
+
+    def compile_table_exists(self, table: str) -> Tuple[str, List[Any]]:
+        """Check if a table exists in PostgreSQL.
+
+        Args:
+            table: Table name
+
+        Returns:
+            Tuple of (SQL, bindings)
+        """
+        return (
+            "SELECT EXISTS(SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = current_schema() AND table_name = $1) AS \"exists\"",
+            [table],
+        )
+
+    def compile_column_exists(self, table: str, column: str) -> Tuple[str, List[Any]]:
+        """Check if a column exists in a PostgreSQL table.
+
+        Args:
+            table: Table name
+            column: Column name
+
+        Returns:
+            Tuple of (SQL, bindings)
+        """
+        return (
+            "SELECT EXISTS(SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2) AS \"exists\"",
+            [table, column],
+        )
+
+    def compile_index_exists(
+        self, table: str, columns: List[str], index_type: Optional[str] = None
+    ) -> Tuple[str, List[Any]]:
+        """Check if an index exists on a PostgreSQL table.
+
+        Args:
+            table: Table name
+            columns: Index columns
+            index_type: Type of index
+
+        Returns:
+            Tuple of (SQL, bindings)
+        """
+        return (
+            "SELECT EXISTS(SELECT 1 FROM pg_indexes "
+            "WHERE tablename = $1) AS \"exists\"",
+            [table],
+        )
+
+    def compile_get_tables(self) -> str:
+        """Get all user-defined tables in the PostgreSQL database.
+
+        Returns:
+            SQL statement
+        """
+        return (
+            "SELECT table_name AS name, table_type AS type "
+            "FROM information_schema.tables "
+            "WHERE table_schema = current_schema() ORDER BY table_name"
+        )
+
+    def compile_get_columns(self, table: str) -> Tuple[str, List[Any]]:
+        """Get column information for a PostgreSQL table.
+
+        Args:
+            table: Table name
+
+        Returns:
+            Tuple of (SQL, bindings)
+        """
+        return (
+            "SELECT column_name AS name, data_type AS type, "
+            "is_nullable, column_default AS dflt_value, ordinal_position AS cid "
+            "FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position",
+            [table],
+        )
+
+    def compile_get_indexes(self, table: str) -> Tuple[str, List[Any]]:
+        """Get index information for a PostgreSQL table.
+
+        Args:
+            table: Table name
+
+        Returns:
+            Tuple of (SQL, bindings)
+        """
+        return (
+            "SELECT indexname AS name, indexdef FROM pg_indexes WHERE tablename = $1",
+            [table],
+        )
+
+    def compile_get_foreign_keys(self, table: str) -> Tuple[str, List[Any]]:
+        """Get foreign key information for a PostgreSQL table.
+
+        Args:
+            table: Table name
+
+        Returns:
+            Tuple of (SQL, bindings)
+        """
+        return (
+            "SELECT kcu.column_name AS \"from\", ccu.table_name AS \"table\", "
+            "ccu.column_name AS \"to\", rc.update_rule AS on_update, rc.delete_rule AS on_delete "
+            "FROM information_schema.table_constraints tc "
+            "JOIN information_schema.key_column_usage kcu "
+            "  ON tc.constraint_name = kcu.constraint_name "
+            "JOIN information_schema.constraint_column_usage ccu "
+            "  ON ccu.constraint_name = tc.constraint_name "
+            "JOIN information_schema.referential_constraints rc "
+            "  ON rc.constraint_name = tc.constraint_name "
+            "WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_name = $1",
+            [table],
+        )
