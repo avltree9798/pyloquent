@@ -428,6 +428,79 @@ async def test_mysql_no_pool_recycle_no_kwarg():
 
 
 # ---------------------------------------------------------------------------
+# Regression: aiomysql.DictCursor NameError in fetch_all / fetch_one
+# Bug: aiomysql was only imported inside connect(); fetch_all and fetch_one
+# used aiomysql.DictCursor without a local import → NameError at query time.
+# ---------------------------------------------------------------------------
+
+def _make_mysql_with_mock_pool():
+    """Return a MySQLConnection wired to a fully-mocked aiomysql pool."""
+    import sys
+    from types import ModuleType
+    from pyloquent.database.mysql_connection import MySQLConnection
+
+    # Build a fake aiomysql module with DictCursor so the local import succeeds
+    fake_aiomysql = ModuleType("aiomysql")
+    fake_aiomysql.DictCursor = object()          # any sentinel works
+
+    # Cursor mock: fetchall returns rows, fetchone returns a single row
+    cursor_ctx = MagicMock()
+    cursor_ctx.__aenter__ = AsyncMock(return_value=cursor_ctx)
+    cursor_ctx.__aexit__ = AsyncMock(return_value=False)
+    cursor_ctx.execute = AsyncMock()
+    cursor_ctx.fetchall = AsyncMock(return_value=[{"id": 1, "name": "Alice"}])
+    cursor_ctx.fetchone = AsyncMock(return_value={"id": 1, "name": "Alice"})
+
+    # conn mock: cursor() returns the cursor_ctx
+    conn_ctx = MagicMock()
+    conn_ctx.__aenter__ = AsyncMock(return_value=conn_ctx)
+    conn_ctx.__aexit__ = AsyncMock(return_value=False)
+    conn_ctx.cursor = MagicMock(return_value=cursor_ctx)
+
+    # pool mock: acquire() returns conn_ctx
+    mock_pool = MagicMock()
+    mock_pool.acquire = MagicMock(return_value=conn_ctx)
+
+    fake_aiomysql.create_pool = AsyncMock(return_value=mock_pool)
+
+    conn = MySQLConnection({})
+    conn._pool = mock_pool
+    conn._connected = True
+
+    return conn, fake_aiomysql
+
+
+@pytest.mark.asyncio
+async def test_mysql_fetch_all_no_nameerror():
+    """fetch_all() must not raise NameError for aiomysql (regression for missing import).
+
+    Previously, aiomysql.DictCursor was used in fetch_all without a local
+    import of aiomysql, causing NameError on every MySQL SELECT query.
+    """
+    conn, fake_aiomysql = _make_mysql_with_mock_pool()
+
+    with patch.dict("sys.modules", {"aiomysql": fake_aiomysql}):
+        rows = await conn.fetch_all("SELECT * FROM users")
+
+    assert rows == [{"id": 1, "name": "Alice"}]
+
+
+@pytest.mark.asyncio
+async def test_mysql_fetch_one_no_nameerror():
+    """fetch_one() must not raise NameError for aiomysql (regression for missing import).
+
+    Previously, aiomysql.DictCursor was used in fetch_one without a local
+    import of aiomysql, causing NameError on every MySQL SELECT query.
+    """
+    conn, fake_aiomysql = _make_mysql_with_mock_pool()
+
+    with patch.dict("sys.modules", {"aiomysql": fake_aiomysql}):
+        row = await conn.fetch_one("SELECT * FROM users WHERE id = ?", [1])
+
+    assert row == {"id": 1, "name": "Alice"}
+
+
+# ---------------------------------------------------------------------------
 # sqlite_connection.py — QueryException re-raise (lines 118, 156, 190)
 # ---------------------------------------------------------------------------
 
