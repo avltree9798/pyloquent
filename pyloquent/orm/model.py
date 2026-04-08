@@ -1463,9 +1463,9 @@ class Model(BaseModel, metaclass=ModelMeta):
         return cls.query.doesnt_exist()
 
     @classmethod
-    def value(cls: Type[T], column: str) -> Any:
+    def scalar(cls: Type[T], column: str) -> Any:
         """Get a single column value from the first record."""
-        return cls.query.value(column)
+        return cls.query.scalar(column)
 
     @classmethod
     def select(cls: Type[T], *columns: str) -> "QueryBuilder[T]":

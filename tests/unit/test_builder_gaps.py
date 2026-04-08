@@ -148,7 +148,7 @@ async def test_value_returns_none_when_no_results():
     conn.fetch_one = AsyncMock(return_value=None)
     conn.fetch_all = AsyncMock(return_value=[])
     q = QueryBuilder(SQLiteGrammar(), connection=conn).from_("things")
-    result = await q.value("name")
+    result = await q.scalar("name")
     assert result is None
 
 
@@ -163,7 +163,7 @@ async def test_value_returns_dict_key():
     conn.fetch_one = AsyncMock(return_value={"name": "Alice", "id": 1})
     conn.fetch_all = AsyncMock(return_value=[{"name": "Alice", "id": 1}])
     q = QueryBuilder(SQLiteGrammar(), connection=conn).from_("things")
-    result = await q.value("name")
+    result = await q.scalar("name")
     assert result == "Alice"
 
 

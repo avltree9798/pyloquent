@@ -280,7 +280,7 @@ exists = await User.where('email', 'alice@example.com').exists()
 missing = await User.where('email', 'ghost@example.com').doesnt_exist()
 
 # Scalar value
-name = await User.where('id', 1).value('name')
+name = await User.where('id', 1).scalar('name')
 
 # Destroy by primary keys (returns count)
 await User.destroy(1, 2, 3)
@@ -570,7 +570,7 @@ await User.max('age')
 await User.min('age')
 await User.sum('points')
 await User.avg('age')
-await User.value('name')   # scalar value of first row's column
+await User.scalar('name')  # scalar value of first row's column
 ```
 
 ### Selects

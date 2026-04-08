@@ -265,7 +265,7 @@ async def test_where_in_proxy(sqlite_db, cm_tables):
 @pytest.mark.asyncio
 async def test_value_proxy(sqlite_db, cm_tables):
     await CmUser.create({"name": "Walt"})
-    name = await CmUser.order_by("id").value("name")
+    name = await CmUser.order_by("id").scalar("name")
     assert name == "Walt"
 
 

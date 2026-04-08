@@ -1832,7 +1832,7 @@ class QueryBuilder(Generic[T]):
 
         return [result.get(column) for result in results]
 
-    async def value(self, column: str) -> Any:
+    async def scalar(self, column: str) -> Any:
         """Get a single column's value from the first result.
 
         Args:

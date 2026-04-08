@@ -444,7 +444,7 @@ async def test_aggregate_methods(sqlite_db, setup_extended_tables):
 @pytest.mark.asyncio
 async def test_value(sqlite_db, setup_extended_tables):
     await User.create({"name": "ValUser", "email": "val@x.com", "score": 77})
-    result = await User.order_by("id", "desc").value("score")
+    result = await User.order_by("id", "desc").scalar("score")
     assert result == 77
 
 

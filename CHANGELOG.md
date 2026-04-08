@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-04-08
+
+### Fixed
+
+- **`UserWarning: Field name "value" shadows an attribute in parent "Model"`** — `Model` and `QueryBuilder` exposed a classmethod / method named `value()` (a proxy for retrieving a single scalar column from the first result).  Any user model with a `value` field would trigger a Pydantic v2 `UserWarning` on class creation.  Renamed `value()` → `scalar()` on both `QueryBuilder` and `Model` to free `value` as a safe field name.  Update call sites: `Model.scalar(column)` / `qs.scalar(column)`.
+
 ## [0.3.2] - 2026-04-08
 
 ### Fixed

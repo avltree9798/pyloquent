@@ -325,7 +325,7 @@ async def test_push_with_single_relation(sqlite_db, ec_tables):
 @pytest.mark.asyncio
 async def test_value_classmethod(sqlite_db, ec_tables):
     await EcUser.create({"name": "ValTest"})
-    name = await EcUser.value("name")
+    name = await EcUser.scalar("name")
     assert name is not None
 
 
