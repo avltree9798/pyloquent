@@ -370,6 +370,7 @@ async def test_sqlite_retry_failure_raises_query_exception():
 @pytest.mark.asyncio
 async def test_postgres_pool_recycle_kwarg():
     """pool_recycle is forwarded to asyncpg.create_pool."""
+    pytest.importorskip("asyncpg")
     from pyloquent.database.postgres_connection import PostgresConnection
 
     conn = PostgresConnection({"pool_recycle": 600})
@@ -385,6 +386,7 @@ async def test_postgres_pool_recycle_kwarg():
 @pytest.mark.asyncio
 async def test_postgres_no_pool_recycle_no_kwarg():
     """Without pool_recycle, max_inactive_connection_lifetime is not passed."""
+    pytest.importorskip("asyncpg")
     from pyloquent.database.postgres_connection import PostgresConnection
 
     conn = PostgresConnection({})
@@ -402,6 +404,7 @@ async def test_postgres_no_pool_recycle_no_kwarg():
 @pytest.mark.asyncio
 async def test_mysql_pool_recycle_kwarg():
     """pool_recycle is forwarded to aiomysql.create_pool."""
+    pytest.importorskip("aiomysql")
     from pyloquent.database.mysql_connection import MySQLConnection
 
     conn = MySQLConnection({"pool_recycle": 1800})
@@ -417,6 +420,7 @@ async def test_mysql_pool_recycle_kwarg():
 @pytest.mark.asyncio
 async def test_mysql_no_pool_recycle_no_kwarg():
     """Without pool_recycle, pool_recycle kwarg is not passed to aiomysql."""
+    pytest.importorskip("aiomysql")
     from pyloquent.database.mysql_connection import MySQLConnection
 
     conn = MySQLConnection({})
