@@ -200,6 +200,14 @@ class Model(BaseModel, metaclass=ModelMeta):
             if "updated_at" in self.__class__.model_fields:
                 dirty["updated_at"] = datetime.now()
 
+        # Apply casts symmetrically with INSERT — without this, `__casts__`
+        # decodes on read but never re-encodes on update, so a model that
+        # round-trips a dict through a `json`-cast column would crash with
+        # `type 'dict' is not supported` from the database driver. See
+        # `tests/integration/test_json_cast_save.py`.
+        for key in list(dirty.keys()):
+            dirty[key] = self._set_cast_attribute(key, dirty[key])
+
         # Update — handles both single and composite primary keys
         query = self._new_query()
         key = self._get_key()

@@ -107,6 +107,19 @@ class OrderClause:
 
 
 @dataclass
+class RawOrderClause:
+    """Represents an ORDER BY clause whose contents are a raw SQL fragment.
+
+    Used by `QueryBuilder.order_by_raw()` so users can express things the
+    builder doesn't model natively — `NULLS FIRST`, `COALESCE(...)`, a
+    `CASE` expression, etc. The grammar emits the `sql` text verbatim and
+    appends any `bindings` to the parameter list."""
+
+    sql: str
+    bindings: List[Any] = field(default_factory=list)
+
+
+@dataclass
 class HavingClause:
     """Represents a HAVING clause."""
 

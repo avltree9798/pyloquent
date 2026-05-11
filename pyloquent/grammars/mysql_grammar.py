@@ -219,3 +219,22 @@ class MySQLGrammar(Grammar):
             "AND kcu.referenced_table_name IS NOT NULL",
             [table],
         )
+
+    def _compile_auto_increment(self) -> str:
+        """MySQL spells it with an underscore."""
+        return "AUTO_INCREMENT"
+
+    def _compile_auto_increment_column(self, column) -> str:  # noqa: ANN001
+        """MySQL form: `BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY`.
+
+        The keyword is `AUTO_INCREMENT` (underscore) — `AUTOINCREMENT` is a
+        SQLite-only spelling.
+        """
+        parts = [self._wrap_column(column.name), self._compile_column_type(column)]
+        if column.unsigned:
+            parts.append("UNSIGNED")
+        parts.append("NOT NULL")
+        parts.append(self._compile_auto_increment())
+        if column.primary:
+            parts.append("PRIMARY KEY")
+        return " ".join(parts)

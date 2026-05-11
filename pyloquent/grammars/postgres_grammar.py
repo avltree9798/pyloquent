@@ -237,3 +237,25 @@ class PostgresGrammar(Grammar):
             "WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_name = $1",
             [table],
         )
+
+    def _compile_auto_increment_column(self, column) -> str:  # noqa: ANN001
+        """PostgreSQL has no `AUTOINCREMENT` keyword — it uses the SERIAL
+        family of pseudo-types which create the underlying sequence + DEFAULT
+        + NOT NULL constraint in one go.
+
+            SERIAL     →  4-byte    (mirrors `increments()`)
+            BIGSERIAL  →  8-byte    (mirrors `big_increments()` and the
+                                     `id()` shorthand)
+            SMALLSERIAL → 2-byte    (`small_increments()`)
+        """
+        type_map = {
+            "integer": "SERIAL",
+            "small_integer": "SMALLSERIAL",
+            "medium_integer": "SERIAL",
+            "big_integer": "BIGSERIAL",
+        }
+        serial_type = type_map.get(column.type, "BIGSERIAL")
+        parts = [self._wrap_column(column.name), serial_type]
+        if column.primary:
+            parts.append("PRIMARY KEY")
+        return " ".join(parts)

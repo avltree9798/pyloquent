@@ -24,6 +24,7 @@ from pyloquent.query.expression import (
     JoinCondition,
     OrderClause,
     RawExpression,
+    RawOrderClause,
     WhereClause,
 )
 
@@ -1163,6 +1164,32 @@ class QueryBuilder(Generic[T]):
             Self for chaining
         """
         return self.order_by(column, "desc")
+
+    def order_by_raw(
+        self, sql: str, bindings: Optional[List[Any]] = None
+    ) -> "QueryBuilder[T]":
+        """Add an ORDER BY clause whose contents are a raw SQL fragment.
+
+        Use this when you need expressions the builder doesn't model
+        natively — `NULLS FIRST`, `COALESCE(...)`, `CASE WHEN ...`, etc.
+
+        Args:
+            sql: Raw SQL fragment (without the leading "ORDER BY").
+                 Example: `"COALESCE(end_date, '9999-12-31') DESC"`.
+            bindings: Optional parameter values that match `?` placeholders
+                      in `sql`. They're appended in order to the query's
+                      binding list.
+
+        Returns:
+            Self for chaining.
+        """
+        bindings_list = list(bindings or [])
+        self._orders.append(RawOrderClause(sql=sql, bindings=bindings_list))
+        # Track bindings in the dedicated `order` bucket so the grammar's
+        # `_get_bindings` (or any future consumer) picks them up alongside
+        # other ORDER BY values.
+        self._bindings["order"].extend(bindings_list)
+        return self
 
     def latest(self, column: str = "created_at") -> "QueryBuilder[T]":
         """Order by the given column in descending order.

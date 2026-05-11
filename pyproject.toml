@@ -1,6 +1,6 @@
 [project]
 name = "pyloquent"
-version = "0.3.3"
+version = "0.3.4"
 description = "Eloquent-inspired ORM for Python with Pydantic and FastAPI support"
 readme = "README.md"
 license = {text = "MIT"}
@@ -163,4 +163,12 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "class .*\\bProtocol\\):",
     "@(abc\\.)?abstractmethod",
+]
+
+[dependency-groups]
+dev = [
+    "aiosqlite>=0.22.1",
+    "freezegun>=1.5.5",
+    "pytest-asyncio>=1.3.0",
+    "pytest-cov>=7.1.0",
 ]

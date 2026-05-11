@@ -110,6 +110,9 @@ class Grammar(ABC):
         # ORDER BY
         if query._orders:
             sql_parts.append(self._compile_orders(query))
+            # `order_by_raw` parks its bindings in the `order` bucket; pull
+            # them across to the query-level binding list.
+            bindings.extend(query._bindings.get("order", []))
 
         # LIMIT
         if query._limit is not None:
@@ -536,14 +539,23 @@ class Grammar(ABC):
     def _compile_orders(self, query: "QueryBuilder") -> str:
         """Compile the ORDER BY clause.
 
+        Supports both `OrderClause` (column-and-direction) and
+        `RawOrderClause` (verbatim SQL fragment, optionally with `?`
+        bindings).
+
         Args:
             query: The query builder instance
 
         Returns:
             SQL ORDER BY clause
         """
+        from pyloquent.query.expression import RawOrderClause
+
         orders = []
         for order in query._orders:
+            if isinstance(order, RawOrderClause):
+                orders.append(order.sql)
+                continue
             column = self._wrap_column(order.column)
             direction = order.direction.upper()
             orders.append(f"{column} {direction}")
@@ -940,6 +952,14 @@ class Grammar(ABC):
         Returns:
             Column SQL
         """
+        # Auto-increment columns are wildly dialect-specific (SQLite needs
+        # `INTEGER PRIMARY KEY AUTOINCREMENT`, PostgreSQL needs `BIGSERIAL
+        # PRIMARY KEY`, MySQL needs `BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
+        # PRIMARY KEY`). We delegate the entire decision to a separate hook
+        # so each dialect can override cleanly.
+        if column.auto_increment:
+            return self._compile_auto_increment_column(column)
+
         sql_parts = [self._wrap_column(column.name)]
 
         # Type
@@ -960,11 +980,30 @@ class Grammar(ABC):
         if column.default is not None:
             sql_parts.append(f"DEFAULT {self._compile_default_value(column.default)}")
 
-        # Auto increment
-        if column.auto_increment:
-            sql_parts.append(self._compile_auto_increment())
+        # Inline PRIMARY KEY (single-column PKs only; composite PKs are
+        # emitted as a separate constraint by the caller).
+        if column.primary:
+            sql_parts.append("PRIMARY KEY")
 
         return " ".join(sql_parts)
+
+    def _compile_auto_increment_column(self, column: "Column") -> str:
+        """Compile an auto-incrementing column.
+
+        Default implementation produces a MySQL-flavoured `BIGINT UNSIGNED
+        NOT NULL AUTO_INCREMENT PRIMARY KEY`. SQLite and PostgreSQL grammars
+        override this with their own native idioms (`INTEGER PRIMARY KEY
+        AUTOINCREMENT` and `BIGSERIAL PRIMARY KEY` respectively).
+        """
+        type_sql = self._compile_column_type(column)
+        parts = [self._wrap_column(column.name), type_sql]
+        if column.unsigned:
+            parts.append("UNSIGNED")
+        parts.append("NOT NULL")
+        parts.append(self._compile_auto_increment())
+        if column.primary:
+            parts.append("PRIMARY KEY")
+        return " ".join(parts)
 
     def _compile_column_type(self, column: "Column") -> str:
         """Compile column type.

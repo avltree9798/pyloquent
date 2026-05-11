@@ -445,26 +445,32 @@ class Blueprint:
         return column
 
     def timestamps(self, precision: int = 0) -> List[Column]:
-        """Create created_at and updated_at columns."""
-        return [
-            self.timestamp("created_at", precision).nullable(),
-            self.timestamp("updated_at", precision).nullable(),
-        ]
+        """Create created_at and updated_at columns (both nullable)."""
+        created = self.timestamp("created_at", precision)
+        created.nullable = True
+        updated = self.timestamp("updated_at", precision)
+        updated.nullable = True
+        return [created, updated]
 
     def timestamps_tz(self, precision: int = 0) -> List[Column]:
-        """Create created_at and updated_at columns with timezone."""
-        return [
-            self.timestamp_tz("created_at", precision).nullable(),
-            self.timestamp_tz("updated_at", precision).nullable(),
-        ]
+        """Create created_at and updated_at columns with timezone (nullable)."""
+        created = self.timestamp_tz("created_at", precision)
+        created.nullable = True
+        updated = self.timestamp_tz("updated_at", precision)
+        updated.nullable = True
+        return [created, updated]
 
     def soft_deletes(self, column: str = "deleted_at", precision: int = 0) -> Column:
-        """Create deleted_at column for soft deletes."""
-        return self.timestamp(column, precision).nullable()
+        """Create a nullable deleted_at column for soft deletes."""
+        col = self.timestamp(column, precision)
+        col.nullable = True
+        return col
 
     def soft_deletes_tz(self, column: str = "deleted_at", precision: int = 0) -> Column:
-        """Create deleted_at column with timezone for soft deletes."""
-        return self.timestamp_tz(column, precision).nullable()
+        """Create a nullable deleted_at TIMESTAMPTZ column for soft deletes."""
+        col = self.timestamp_tz(column, precision)
+        col.nullable = True
+        return col
 
     def year(self, column: str) -> Column:
         """Create YEAR column."""

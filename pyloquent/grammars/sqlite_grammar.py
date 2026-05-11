@@ -57,6 +57,19 @@ class SQLiteGrammar(Grammar):
         """SQLite does not support row locking — return empty string."""
         return ""
 
+    def _compile_auto_increment_column(self, column) -> str:  # noqa: ANN001
+        """SQLite's only valid auto-increment form is:
+
+            "id" INTEGER PRIMARY KEY AUTOINCREMENT
+
+        The column **must** be typed exactly `INTEGER` (not BIGINT, not
+        UNSIGNED INTEGER) for SQLite to treat it as a ROWID alias. SQLite
+        also refuses `NULL` and `DEFAULT` on an AUTOINCREMENT column, so
+        this method emits a fixed-form clause regardless of what `unsigned`
+        / `nullable` / `default` were set to.
+        """
+        return f"{self._wrap_column(column.name)} INTEGER PRIMARY KEY AUTOINCREMENT"
+
     def compile_upsert(
         self,
         query: "QueryBuilder",

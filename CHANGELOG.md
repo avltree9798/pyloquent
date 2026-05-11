@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-05-12
+
+### Fixed
+
+- **`Blueprint.timestamps()` / `timestamps_tz()` / `soft_deletes()` / `soft_deletes_tz()` crashed with `'bool' object is not callable`** — the helpers called `.nullable()` on the freshly-returned `Column`, but `Column` is a dataclass whose `nullable` field is a plain bool, not a fluent setter. They now set the attribute directly. Regression coverage in `tests/unit/test_blueprint_helpers.py`.
+
+- **SchemaBuilder emitted invalid DDL in every dialect for auto-incrementing primary keys**. `id()`, `increments()`, `big_increments()`, etc. all produced `BIGINT UNSIGNED NULL AUTOINCREMENT` — which SQLite, PostgreSQL, and MySQL all reject:
+  - **SQLite** now emits `"id" INTEGER PRIMARY KEY AUTOINCREMENT` (the only valid ROWID-alias form).
+  - **PostgreSQL** now emits `"id" BIGSERIAL PRIMARY KEY` (or `SERIAL` / `SMALLSERIAL` for `increments()` / `small_increments()`).
+  - **MySQL** now emits `` `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY `` (note: `AUTO_INCREMENT` with underscore is the correct MySQL spelling; the SQLite-style `AUTOINCREMENT` keyword is no longer leaked across dialects).
+  - Each dialect's grammar now overrides `_compile_auto_increment_column` independently. Inline `PRIMARY KEY` is also emitted for any column with `column.primary = True`.
+  - Acid-test coverage in `tests/unit/test_grammar_create_table.py` (runs the generated SQLite DDL against an in-memory `sqlite3` and asserts auto-increment works).
+
+- **`__casts__ = "json"` was asymmetric — it decoded on read but did not re-encode on `.save()`**. `Model._perform_insert` correctly went through `_get_attributes_for_save()` (which calls `_set_cast_attribute`), but `_perform_update` used `_get_dirty_attributes()` directly and shipped a Python `dict` / `list` straight to the driver, where it crashed with `Error binding parameter: type 'dict' is not supported`. The cast is now applied symmetrically. Regression coverage in `tests/integration/test_json_cast_save.py`.
+
+### Added
+
+- **`QueryBuilder.order_by_raw(sql, bindings=None)`** — for dialect-specific ORDER BY expressions the builder doesn't model natively (e.g. `NULLS FIRST`, `COALESCE(...)`, computed `CASE` ordering). Bindings are tracked in the existing `order` bucket and bubble up to the final binding list. Companion type `RawOrderClause` exported from `pyloquent.query.expression`. Coverage in `tests/unit/test_order_by_raw.py`.
+
+### Notes
+
+- All four fixes were discovered in the wild by the downstream Mado project (built on Pyloquent + FastAPI). The Mado tests pass against this release without per-table workarounds.
+- Test count: **1056 passing, 4 skipped** (1034 → 1056, +22).
+
 ## [0.3.3] - 2026-04-08
 
 ### Fixed
