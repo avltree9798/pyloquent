@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - 2026-05-12
+
+### Tests
+
+- Restore 100% coverage. The dialect-specific overrides introduced in
+  0.3.4 (SQLite / Postgres / MySQL `_compile_auto_increment_column`)
+  shadowed the base `Grammar` implementation, leaving 11 lines
+  unreachable through the per-dialect test paths. Added
+  `tests/unit/test_grammar_base_fallbacks.py` which exercises the
+  base class directly via a minimal `Grammar` subclass:
+
+  * the inline `PRIMARY KEY` branch for non-auto-increment primary
+    columns (e.g. UUID PKs),
+  * the MySQL-flavoured fallback for grammars that don't override
+    `_compile_auto_increment_column`,
+  * the bare `_compile_auto_increment()` keyword.
+
+  Total: 1061 passing, 4 skipped (+5 from 0.3.4).
+
 ## [0.3.4] - 2026-05-12
 
 ### Fixed
