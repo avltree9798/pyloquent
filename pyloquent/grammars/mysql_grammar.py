@@ -220,6 +220,36 @@ class MySQLGrammar(Grammar):
             [table],
         )
 
+    # ========================================================================
+    # Schema Alteration
+    # ========================================================================
+
+    def _compile_drop_index(self, table: str, name: str) -> str:
+        """MySQL drops indexes via ALTER TABLE ... DROP INDEX."""
+        return f"ALTER TABLE {self._wrap_table(table)} DROP INDEX {self._wrap_column(name)}"
+
+    def _compile_drop_primary(self, table: str, name: Optional[str] = None) -> str:
+        """MySQL uses ALTER TABLE ... DROP PRIMARY KEY (no constraint name)."""
+        return f"ALTER TABLE {self._wrap_table(table)} DROP PRIMARY KEY"
+
+    def _compile_drop_foreign(self, table: str, name: str) -> str:
+        """MySQL uses ALTER TABLE ... DROP FOREIGN KEY."""
+        return f"ALTER TABLE {self._wrap_table(table)} DROP FOREIGN KEY {self._wrap_column(name)}"
+
+    def _compile_rename_index(self, table: str, from_name: str, to_name: str) -> str:
+        """MySQL renames indexes via ALTER TABLE ... RENAME INDEX (5.7+)."""
+        return (
+            f"ALTER TABLE {self._wrap_table(table)} "
+            f"RENAME INDEX {self._wrap_column(from_name)} TO {self._wrap_column(to_name)}"
+        )
+
+    def _compile_change_column(self, table: str, column) -> List[str]:  # noqa: ANN001
+        """MySQL modifies a column in place via ALTER TABLE ... MODIFY COLUMN."""
+        return [
+            f"ALTER TABLE {self._wrap_table(table)} "
+            f"MODIFY COLUMN {self._compile_column(column)}"
+        ]
+
     def _compile_auto_increment(self) -> str:
         """MySQL spells it with an underscore."""
         return "AUTO_INCREMENT"

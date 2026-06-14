@@ -10,6 +10,7 @@ from pyloquent.cli.commands import (
     MakeMigrationCommand,
     MakeModelCommand,
     MigrateCommand,
+    MigrateDiffCommand,
     MigrateFreshCommand,
     MigrateRollbackCommand,
     MigrateStatusCommand,
@@ -34,6 +35,11 @@ def create_parser() -> argparse.ArgumentParser:
     make_migration.add_argument("name", help="Migration name")
     make_migration.add_argument("--table", "-t", help="Table name for table-specific migrations")
     make_migration.add_argument("--create", "-c", action="store_true", help="Create a new table")
+    make_migration.add_argument(
+        "--model",
+        help="Generate a create-table migration from a model "
+        "(e.g. 'app.models.User' or 'app.models:User')",
+    )
     make_migration.add_argument(
         "--path", "-p", default="migrations", help="Migrations directory path"
     )
@@ -94,6 +100,22 @@ def create_parser() -> argparse.ArgumentParser:
     )
     migrate_fresh.add_argument("--config", help="Path to database configuration file")
 
+    # migrate:diff command
+    migrate_diff = subparsers.add_parser(
+        "migrate:diff",
+        help="Generate an alter migration by diffing a model against the live DB",
+    )
+    migrate_diff.add_argument("name", help="Migration name (e.g. update_users_table)")
+    migrate_diff.add_argument(
+        "--model",
+        required=True,
+        help="Model import path (e.g. 'app.models.User' or 'app.models:User')",
+    )
+    migrate_diff.add_argument(
+        "--path", "-p", default="migrations", help="Migrations directory path"
+    )
+    migrate_diff.add_argument("--config", help="Path to database configuration file")
+
     return parser
 
 
@@ -117,7 +139,12 @@ async def run_command(args: argparse.Namespace) -> int:
             cmd = MakeMigrationCommand(
                 migrations_path=args.path,
             )
-            await cmd.handle(name=args.name, table=args.table, create=args.create)
+            await cmd.handle(
+                name=args.name,
+                table=args.table,
+                create=args.create,
+                model=args.model,
+            )
 
         elif command == "make:model":
             cmd = MakeModelCommand(
@@ -157,6 +184,13 @@ async def run_command(args: argparse.Namespace) -> int:
                 config_path=args.config,
             )
             await cmd.handle()
+
+        elif command == "migrate:diff":
+            cmd = MigrateDiffCommand(
+                migrations_path=args.path,
+                config_path=args.config,
+            )
+            await cmd.handle(name=args.name, model=args.model)
 
         else:
             print(f"Unknown command: {command}")

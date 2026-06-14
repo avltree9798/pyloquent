@@ -1152,6 +1152,101 @@ table.integer('views').unsigned()
 table.foreign('user_id').references('id').on('users').on_delete('cascade')
 ```
 
+### Altering Existing Tables
+
+Use `Schema.table()` (the `schema` argument passed to `up` / `down`) to modify
+an existing table. The API mirrors Laravel's Blueprint.
+
+```python
+class AddPhoneToUsers(Migration):
+    async def up(self, schema: SchemaBuilder) -> None:
+        await schema.table('users', lambda table: [
+            table.string('phone').nullable(),          # ADD COLUMN
+            table.index('phone'),                       # CREATE INDEX
+        ])
+
+    async def down(self, schema: SchemaBuilder) -> None:
+        await schema.table('users', lambda table: [
+            table.drop_index(['phone']),
+            table.drop_column('phone'),
+        ])
+```
+
+**Add operations**
+
+```python
+table.string('phone').nullable()    # ADD COLUMN
+table.index('phone')                # CREATE INDEX
+table.unique('email')               # CREATE UNIQUE INDEX
+table.foreign('team_id').references('id').on('teams').cascade_on_delete()
+```
+
+**Drop / rename operations**
+
+```python
+table.drop_column('phone')              # one column
+table.drop_column(['phone', 'fax'])     # several
+table.rename_column('name', 'full_name')
+table.drop_index(['phone'])             # by columns (derives the index name)
+table.drop_index('custom_index_name')   # or by explicit name
+table.drop_unique(['email'])
+table.drop_primary()
+table.drop_foreign(['team_id'])
+table.rename_index('old_name', 'new_name')
+
+# Convenience drops
+table.drop_timestamps()
+table.drop_soft_deletes()
+table.drop_remember_token()
+table.drop_morphs('commentable')
+table.drop_constrained_foreign_id('team_id')   # drops FK + column
+```
+
+**Modifying a column** — call `.change()` (PostgreSQL & MySQL):
+
+```python
+await schema.table('users', lambda table: [
+    table.string('name', 100).nullable(False).change(),
+])
+```
+
+> **SQLite caveat.** SQLite's `ALTER TABLE` is limited. `ADD COLUMN`,
+> `RENAME COLUMN` (SQLite ≥ 3.25) and `DROP COLUMN` (SQLite ≥ 3.35) work
+> natively, but **dropping a primary/foreign key, renaming an index, or
+> `.change()`** raise `NotImplementedError` — recreate the table instead
+> (create new → copy rows → drop old → rename).
+
+### Generating Migrations from Models
+
+Because Pyloquent models declare typed Pydantic fields, you can scaffold a
+migration straight from a model (something Eloquent cannot do):
+
+```bash
+# Create-table migration from a model's fields
+pyloquent make:migration create_users_table --model app.models.User
+# (colon form also works: app.models:User)
+```
+
+The generator maps field annotations to columns: `str → string`,
+`int → integer`, `float → float`, `bool → boolean`, `datetime → timestamp`,
+`date → date`, `dict`/`list → json`, `UUID → uuid`, `Decimal → decimal`.
+`Optional[...]` becomes `.nullable()`, literal defaults become `.default(...)`,
+`created_at`/`updated_at` collapse into `table.timestamps()`, and a
+soft-delete model's `deleted_at` becomes `table.soft_deletes()`. The primary
+key honours `__primary_key__`, `__incrementing__` and `__key_type__`.
+
+### Diffing a Model Against the Live Database
+
+`migrate:diff` introspects the live table and emits an **alter** migration that
+adds columns present on the model but missing from the database, and drops
+columns that exist in the database but no longer on the model:
+
+```bash
+pyloquent migrate:diff update_users_table \
+    --model app.models.User \
+    --config database_config.py
+```
+
 ### Running Migrations
 
 ```bash
@@ -1161,6 +1256,7 @@ pyloquent migrate:rollback --steps=3
 pyloquent migrate:reset             # rollback everything
 pyloquent migrate:fresh             # drop all + re-run
 pyloquent migrate:status            # show status table
+pyloquent migrate:diff update_users_table --model app.models.User --config database_config.py
 ```
 
 ---

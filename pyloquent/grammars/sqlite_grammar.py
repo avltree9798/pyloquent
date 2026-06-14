@@ -93,6 +93,35 @@ class SQLiteGrammar(Grammar):
         return sql, bindings
 
     # ========================================================================
+    # Schema Alteration
+    # ========================================================================
+    #
+    # SQLite's ALTER TABLE is deliberately minimal. It supports ADD COLUMN,
+    # RENAME COLUMN (3.25+) and DROP COLUMN (3.35+) — all handled by the base
+    # grammar — but cannot drop/modify constraints or rename indexes without a
+    # full table rebuild. Those operations raise a clear error.
+
+    def _compile_drop_primary(self, table: str, name: Optional[str] = None) -> str:
+        """SQLite cannot drop a primary key via ALTER TABLE."""
+        raise NotImplementedError(
+            "SQLite cannot drop a primary key via ALTER TABLE. "
+            "Recreate the table (create new → copy rows → drop old → rename)."
+        )
+
+    def _compile_drop_foreign(self, table: str, name: str) -> str:
+        """SQLite cannot drop a foreign key via ALTER TABLE."""
+        raise NotImplementedError(
+            "SQLite cannot drop a foreign key via ALTER TABLE. "
+            "Recreate the table (create new → copy rows → drop old → rename)."
+        )
+
+    def _compile_rename_index(self, table: str, from_name: str, to_name: str) -> str:
+        """SQLite has no ALTER INDEX ... RENAME."""
+        raise NotImplementedError(
+            "SQLite cannot rename an index. Drop and recreate it instead."
+        )
+
+    # ========================================================================
     # Schema Reflection
     # ========================================================================
 

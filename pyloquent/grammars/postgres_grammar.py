@@ -238,6 +238,35 @@ class PostgresGrammar(Grammar):
             [table],
         )
 
+    # ========================================================================
+    # Schema Alteration
+    # ========================================================================
+
+    def _compile_change_column(self, column_table: str, column) -> List[str]:  # noqa: ANN001
+        """PostgreSQL modifies columns with separate ALTER COLUMN clauses.
+
+        Emits one statement each for the type change, the nullability change,
+        and (when set) the default — PostgreSQL has no single MODIFY COLUMN.
+        """
+        wrapped = self._wrap_table(column_table)
+        name = self._wrap_column(column.name)
+        type_sql = self._compile_column_type(column)
+
+        statements = [f"ALTER TABLE {wrapped} ALTER COLUMN {name} TYPE {type_sql}"]
+
+        if column.nullable:
+            statements.append(f"ALTER TABLE {wrapped} ALTER COLUMN {name} DROP NOT NULL")
+        else:
+            statements.append(f"ALTER TABLE {wrapped} ALTER COLUMN {name} SET NOT NULL")
+
+        if column.default is not None and not callable(column.default):
+            statements.append(
+                f"ALTER TABLE {wrapped} ALTER COLUMN {name} "
+                f"SET DEFAULT {self._compile_default_value(column.default)}"
+            )
+
+        return statements
+
     def _compile_auto_increment_column(self, column) -> str:  # noqa: ANN001
         """PostgreSQL has no `AUTOINCREMENT` keyword — it uses the SERIAL
         family of pseudo-types which create the underlying sequence + DEFAULT

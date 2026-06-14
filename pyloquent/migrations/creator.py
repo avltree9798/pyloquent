@@ -56,6 +56,25 @@ class MigrationCreator:
 
         return file_path
 
+    async def create_from_content(self, name: str, content: str) -> Path:
+        """Write a migration file with pre-generated content.
+
+        Used by the model/diff generators which build the full file body
+        themselves rather than from a template.
+
+        Args:
+            name: Migration name (e.g. ``create_users_table``).
+            content: Full Python source for the migration file.
+
+        Returns:
+            Path to the created migration file.
+        """
+        self.migrations_path.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y_%m_%d_%H%M%S")
+        file_path = self.migrations_path / f"{timestamp}_{name}.py"
+        file_path.write_text(content)
+        return file_path
+
     def _get_migration_content(
         self, name: str, table: Optional[str] = None, create: bool = False
     ) -> str:

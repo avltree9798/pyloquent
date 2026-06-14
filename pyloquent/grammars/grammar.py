@@ -828,21 +828,121 @@ class Grammar(ABC):
     def compile_alter_table(self, blueprint: "Blueprint") -> List[str]:
         """Compile ALTER TABLE statements.
 
+        Handles, in order: added columns, modified columns (``.change()``),
+        new indexes, new foreign keys, and drop/rename commands recorded on
+        the blueprint (``drop_column`` / ``rename_column`` / ``drop_index`` /
+        ``drop_primary`` / ``drop_foreign`` / ``rename_index``).
+
         Args:
             blueprint: Table blueprint
 
         Returns:
             List of SQL statements
         """
-        statements = []
+        statements: List[str] = []
+        table = blueprint.table
 
+        # Added or modified columns.
         for column in blueprint.columns:
-            statements.append(
-                f"ALTER TABLE {self._wrap_table(blueprint.table)} "
-                f"ADD COLUMN {self._compile_column(column)}"
-            )
+            if column.change:
+                statements.extend(self._compile_change_column(table, column))
+            else:
+                statements.append(
+                    f"ALTER TABLE {self._wrap_table(table)} "
+                    f"ADD COLUMN {self._compile_column(column)}"
+                )
+
+        # Newly added indexes.
+        for index in blueprint.indexes:
+            statements.append(self._compile_index(table, index))
+
+        # Newly added foreign keys.
+        for fk in blueprint.foreign_keys:
+            statements.append(self._compile_foreign_key(table, fk))
+
+        # Drop / rename commands.
+        for command in blueprint.commands:
+            statements.extend(self._compile_alter_command(table, command))
 
         return statements
+
+    def _compile_alter_command(self, table: str, command: Dict[str, Any]) -> List[str]:
+        """Dispatch a single blueprint alteration command to its compiler.
+
+        Args:
+            table: Table name
+            command: Command dict with a ``type`` key
+
+        Returns:
+            List of SQL statements
+        """
+        ctype = command["type"]
+        if ctype == "drop_column":
+            return self._compile_drop_column(table, command["columns"])
+        if ctype == "rename_column":
+            return [self._compile_rename_column(table, command["from"], command["to"])]
+        if ctype == "drop_index":
+            return [self._compile_drop_index(table, command["name"])]
+        if ctype == "drop_primary":
+            return [self._compile_drop_primary(table, command.get("name"))]
+        if ctype == "drop_foreign":
+            return [self._compile_drop_foreign(table, command["name"])]
+        if ctype == "rename_index":
+            return [self._compile_rename_index(table, command["from"], command["to"])]
+        raise ValueError(f"Unknown alter command: {ctype}")
+
+    def _compile_drop_column(self, table: str, columns: List[str]) -> List[str]:
+        """Compile DROP COLUMN statements (one per column)."""
+        return [
+            f"ALTER TABLE {self._wrap_table(table)} DROP COLUMN {self._wrap_column(col)}"
+            for col in columns
+        ]
+
+    def _compile_rename_column(self, table: str, from_column: str, to_column: str) -> str:
+        """Compile RENAME COLUMN statement."""
+        return (
+            f"ALTER TABLE {self._wrap_table(table)} "
+            f"RENAME COLUMN {self._wrap_column(from_column)} TO {self._wrap_column(to_column)}"
+        )
+
+    def _compile_drop_index(self, table: str, name: str) -> str:
+        """Compile DROP INDEX statement.
+
+        ANSI / SQLite / PostgreSQL treat indexes as schema-level objects, so
+        no table qualifier is needed. MySQL overrides this.
+        """
+        return f"DROP INDEX {self._wrap_column(name)}"
+
+    def _compile_drop_primary(self, table: str, name: Optional[str] = None) -> str:
+        """Compile DROP PRIMARY KEY statement (constraint-based, PostgreSQL form)."""
+        constraint = name or f"{table}_pkey"
+        return (
+            f"ALTER TABLE {self._wrap_table(table)} "
+            f"DROP CONSTRAINT {self._wrap_column(constraint)}"
+        )
+
+    def _compile_drop_foreign(self, table: str, name: str) -> str:
+        """Compile DROP FOREIGN KEY statement (constraint-based, PostgreSQL form)."""
+        return (
+            f"ALTER TABLE {self._wrap_table(table)} "
+            f"DROP CONSTRAINT {self._wrap_column(name)}"
+        )
+
+    def _compile_rename_index(self, table: str, from_name: str, to_name: str) -> str:
+        """Compile RENAME INDEX statement (PostgreSQL form)."""
+        return f"ALTER INDEX {self._wrap_column(from_name)} RENAME TO {self._wrap_column(to_name)}"
+
+    def _compile_change_column(self, table: str, column: "Column") -> List[str]:
+        """Compile a column modification (``.change()``).
+
+        Not portable across dialects, so the base grammar declines. SQLite has
+        no ``ALTER COLUMN`` and requires a 12-step table rebuild; PostgreSQL
+        and MySQL override this with their native syntax.
+        """
+        raise NotImplementedError(
+            "Modifying an existing column is not supported by this database "
+            "via ALTER TABLE. Recreate the table (copy → drop → rename) instead."
+        )
 
     def compile_drop_table(self, table: str) -> str:
         """Compile DROP TABLE statement.

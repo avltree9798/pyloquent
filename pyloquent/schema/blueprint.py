@@ -34,6 +34,10 @@ class Blueprint:
         self.columns: List[Column] = []
         self.indexes: List[Index] = []
         self.foreign_keys: List[ForeignKey] = []
+        # Alteration commands (drop/rename) recorded for ``Schema.table()``.
+        # Modelled on Laravel's Blueprint command list — each entry is a dict
+        # with a ``type`` key (e.g. ``drop_column``) plus type-specific keys.
+        self.commands: List[Dict[str, Any]] = []
         self._temporary = False
         self._engine: Optional[str] = None
         self._charset: Optional[str] = None
@@ -715,25 +719,61 @@ class Blueprint:
         self.indexes.append(index)
         return self
 
+    def _resolve_index_name(self, suffix: str, value: Union[str, List[str]]) -> str:
+        """Resolve an index name from either an explicit name or column list.
+
+        Args:
+            suffix: Index suffix (``index`` / ``unique`` / ``primary`` etc.).
+            value: Either an explicit index name (str) or a list of columns
+                from which Laravel's default name is derived.
+
+        Returns:
+            The resolved index name.
+        """
+        if isinstance(value, list):
+            return f"{self.table}_{'_'.join(value)}_{suffix}"
+        return value
+
     def drop_primary(self, index_name: Optional[str] = None) -> "Blueprint":
-        """Drop primary key (for migrations)."""
-        # This would be handled by the migration compiler
+        """Drop the primary key.
+
+        Args:
+            index_name: Optional constraint name (required by PostgreSQL).
+        """
+        self.commands.append({"type": "drop_primary", "name": index_name})
         return self
 
-    def drop_unique(self, index_name: str) -> "Blueprint":
-        """Drop unique index (for migrations)."""
+    def drop_unique(self, index: Union[str, List[str]]) -> "Blueprint":
+        """Drop a unique index by name or by the columns it covers."""
+        self.commands.append(
+            {"type": "drop_index", "name": self._resolve_index_name("unique", index)}
+        )
         return self
 
-    def drop_index(self, index_name: str) -> "Blueprint":
-        """Drop index (for migrations)."""
+    def drop_index(self, index: Union[str, List[str]]) -> "Blueprint":
+        """Drop an index by name or by the columns it covers."""
+        self.commands.append(
+            {"type": "drop_index", "name": self._resolve_index_name("index", index)}
+        )
         return self
 
-    def drop_full_text(self, index_name: str) -> "Blueprint":
-        """Drop full-text index (for migrations)."""
+    def drop_full_text(self, index: Union[str, List[str]]) -> "Blueprint":
+        """Drop a full-text index by name or by the columns it covers."""
+        self.commands.append(
+            {"type": "drop_index", "name": self._resolve_index_name("fulltext", index)}
+        )
         return self
 
-    def drop_spatial_index(self, index_name: str) -> "Blueprint":
-        """Drop spatial index (for migrations)."""
+    def drop_spatial_index(self, index: Union[str, List[str]]) -> "Blueprint":
+        """Drop a spatial index by name or by the columns it covers."""
+        self.commands.append(
+            {"type": "drop_index", "name": self._resolve_index_name("spatial", index)}
+        )
+        return self
+
+    def rename_index(self, from_name: str, to_name: str) -> "Blueprint":
+        """Rename an index."""
+        self.commands.append({"type": "rename_index", "from": from_name, "to": to_name})
         return self
 
     # ========================================================================
@@ -755,44 +795,59 @@ class Blueprint:
         self.foreign_keys.append(fk)
         return ForeignKeyConstraint(self, fk)
 
-    def drop_foreign(self, name: str) -> "Blueprint":
-        """Drop foreign key (for migrations)."""
+    def drop_foreign(self, name: Union[str, List[str]]) -> "Blueprint":
+        """Drop a foreign key by name or by the columns it covers."""
+        self.commands.append(
+            {"type": "drop_foreign", "name": self._resolve_index_name("foreign", name)}
+        )
         return self
 
     def drop_constrained_foreign_id(self, column: str) -> "Blueprint":
-        """Drop foreign key and column (for migrations)."""
-        return self
+        """Drop a foreign key constraint and its column."""
+        self.drop_foreign([column])
+        return self.drop_column(column)
 
     # ========================================================================
     # Column Modifiers
     # ========================================================================
 
     def rename_column(self, from_column: str, to_column: str) -> "Blueprint":
-        """Rename column (for migrations)."""
+        """Rename a column."""
+        self.commands.append(
+            {"type": "rename_column", "from": from_column, "to": to_column}
+        )
         return self
 
     def drop_column(self, columns: Union[str, List[str]]) -> "Blueprint":
-        """Drop column(s) (for migrations)."""
+        """Drop one or more columns."""
+        if isinstance(columns, str):
+            columns = [columns]
+        self.commands.append({"type": "drop_column", "columns": list(columns)})
         return self
 
-    def drop_soft_deletes(self) -> "Blueprint":
-        """Drop deleted_at column (for migrations)."""
-        return self.drop_column("deleted_at")
+    def drop_morphs(self, name: str, index_name: Optional[str] = None) -> "Blueprint":
+        """Drop the columns and index created by :meth:`morphs`."""
+        self.drop_index(index_name or [f"{name}_id", f"{name}_type"])
+        return self.drop_column([f"{name}_id", f"{name}_type"])
 
-    def drop_soft_deletes_tz(self) -> "Blueprint":
-        """Drop deleted_at column with timezone (for migrations)."""
-        return self.drop_column("deleted_at")
+    def drop_soft_deletes(self, column: str = "deleted_at") -> "Blueprint":
+        """Drop the soft-delete column."""
+        return self.drop_column(column)
 
-    def drop_remember_token() -> "Blueprint":
-        """Drop remember_token column (for migrations)."""
+    def drop_soft_deletes_tz(self, column: str = "deleted_at") -> "Blueprint":
+        """Drop the soft-delete column with timezone."""
+        return self.drop_column(column)
+
+    def drop_remember_token(self) -> "Blueprint":
+        """Drop the remember_token column."""
         return self.drop_column("remember_token")
 
     def drop_timestamps(self) -> "Blueprint":
-        """Drop created_at and updated_at columns (for migrations)."""
+        """Drop the created_at and updated_at columns."""
         return self.drop_column(["created_at", "updated_at"])
 
     def drop_timestamps_tz(self) -> "Blueprint":
-        """Drop created_at and updated_at columns with timezone (for migrations)."""
+        """Drop the created_at and updated_at columns with timezone."""
         return self.drop_column(["created_at", "updated_at"])
 
 

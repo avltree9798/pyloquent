@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.8] - 2026-06-14
+
+### Added
+
+- **Full table-alteration support in `Schema.table()`** — previously only `ADD COLUMN` worked and every drop/rename method was a silent no-op stub. The Blueprint now records alteration commands (modelled on Laravel's Blueprint) and the grammars compile them per dialect:
+  - `drop_column(name | [names])`, `rename_column(from, to)`
+  - `drop_index(name | [columns])`, `drop_unique(...)`, `drop_full_text(...)`, `drop_spatial_index(...)`, `rename_index(from, to)`
+  - `drop_primary([name])`, `drop_foreign(name | [columns])`, `drop_constrained_foreign_id(column)`
+  - Convenience drops: `drop_timestamps()`, `drop_soft_deletes()`, `drop_remember_token()` (previously broken — missing `self`), `drop_morphs(name)`
+  - Adding indexes and foreign keys in alter mode (`compile_alter_table` previously ignored `blueprint.indexes` / `blueprint.foreign_keys`)
+  - Column modification via `.change()` — `MODIFY COLUMN` on MySQL, `ALTER COLUMN TYPE/SET|DROP NOT NULL/SET DEFAULT` on PostgreSQL
+  - **SQLite** emits native `ADD COLUMN` / `RENAME COLUMN` (3.25+) / `DROP COLUMN` (3.35+); dropping a primary/foreign key, renaming an index, or `.change()` raise a clear `NotImplementedError` (SQLite requires a table rebuild). Coverage in `tests/unit/test_grammar_alter.py` and `tests/integration/test_schema_alter.py`.
+
+- **Generate migrations from models** (`pyloquent.migrations.generator`) — Pyloquent models carry typed Pydantic fields, so a create-table migration can be scaffolded from a model (something Eloquent cannot do). CLI: `pyloquent make:migration <name> --model app.models.User`. Field types map to Blueprint calls (`str→string`, `int→integer`, `datetime→timestamp`, `dict`/`list→json`, `UUID→uuid`, `Decimal→decimal`, …); `Optional[...]→.nullable()`, literal defaults `→.default(...)`, `created_at`/`updated_at`→`timestamps()`, soft-delete `deleted_at`→`soft_deletes()`; primary key honours `__primary_key__` / `__incrementing__` / `__key_type__`.
+
+- **Schema diff migrations** — `pyloquent migrate:diff <name> --model app.models.User --config ...` introspects the live table and emits an alter migration that adds model columns missing from the database and drops database columns no longer on the model. Coverage in `tests/unit/test_migration_generator.py` and `tests/integration/test_cli_generate.py`.
+
+### Notes
+
+- The alter API names mirror Laravel's Blueprint for familiarity.
+- Test count: **1120 passing, 4 skipped** (+39 from 0.3.7); 100% coverage maintained.
+
 ## [0.3.7] - 2026-06-14
 
 ### Fixed

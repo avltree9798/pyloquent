@@ -9,6 +9,38 @@ from pyloquent.migrations.creator import MigrationCreator
 from pyloquent.migrations.runner import MigrationRunner
 
 
+def _import_model(path: str):
+    """Import a model class from a dotted or colon-separated path.
+
+    Accepts ``package.module.ClassName`` or ``package.module:ClassName``.
+
+    Args:
+        path: Import path to the model class.
+
+    Returns:
+        The imported model class.
+
+    Raises:
+        ValueError: If the path is malformed.
+        ImportError / AttributeError: If the module or class cannot be found.
+    """
+    import importlib
+
+    if ":" in path:
+        module_path, _, attr = path.partition(":")
+    else:
+        module_path, _, attr = path.rpartition(".")
+
+    if not module_path or not attr:
+        raise ValueError(
+            f"Invalid model path: {path!r}. Use 'package.module.ClassName' "
+            "or 'package.module:ClassName'."
+        )
+
+    module = importlib.import_module(module_path)
+    return getattr(module, attr)
+
+
 class Command(ABC):
     """Base class for CLI commands."""
 
@@ -33,16 +65,31 @@ class MakeMigrationCommand(Command):
         """
         self.migrations_path = migrations_path
 
-    async def handle(self, name: str, table: Optional[str] = None, create: bool = False) -> None:
+    async def handle(
+        self,
+        name: str,
+        table: Optional[str] = None,
+        create: bool = False,
+        model: Optional[str] = None,
+    ) -> None:
         """Handle the command.
 
         Args:
             name: Migration name
             table: Optional table name
             create: Whether to create a table
+            model: Optional model import path to generate a create migration from
         """
         creator = MigrationCreator(self.migrations_path)
-        path = await creator.create(name, table=table, create=create)
+
+        if model:
+            from pyloquent.migrations.generator import generate_create_migration
+
+            model_cls = _import_model(model)
+            content = generate_create_migration(model_cls, name)
+            path = await creator.create_from_content(name, content)
+        else:
+            path = await creator.create(name, table=table, create=create)
 
         print(f"Created migration: {path}")
 
@@ -330,3 +377,36 @@ class MigrateFreshCommand(DatabaseCommand):
 
         finally:
             await manager.disconnect()
+
+
+class MigrateDiffCommand(DatabaseCommand):
+    """Generate an alter migration by diffing a model against the live DB."""
+
+    async def handle(self, name: str, model: str) -> None:
+        """Handle the command.
+
+        Args:
+            name: Migration name (e.g. ``update_users_table``).
+            model: Import path to the model to diff against the database.
+        """
+        from pyloquent.migrations.generator import (
+            generate_diff_migration,
+            get_table_name,
+        )
+        from pyloquent.schema.builder import SchemaBuilder
+
+        model_cls = _import_model(model)
+        table = get_table_name(model_cls)
+
+        manager = await self._get_manager()
+        try:
+            schema = SchemaBuilder(manager)
+            existing = await schema.get_columns(table)
+            existing_names = [row["name"] for row in existing]
+            content = generate_diff_migration(model_cls, existing_names, name)
+        finally:
+            await manager.disconnect()
+
+        creator = MigrationCreator(self.migrations_path)
+        path = await creator.create_from_content(name, content)
+        print(f"Created migration: {path}")

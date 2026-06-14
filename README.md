@@ -645,11 +645,18 @@ async def list_users(page: int = 1):
 pyloquent make:model User
 pyloquent make:model User --migration
 pyloquent make:migration create_users_table --create
+pyloquent make:migration create_users_table --model app.models.User  # generate from a model
 pyloquent migrate
 pyloquent migrate:rollback
 pyloquent migrate:status
 pyloquent migrate:fresh
+pyloquent migrate:diff update_users_table --model app.models.User     # diff model vs live DB
 ```
+
+Migrations support full table alteration (`Schema.table(...)`): add/drop/rename
+columns, drop/rename indexes, drop primary/foreign keys, and `.change()` column
+modifications (PostgreSQL & MySQL). See the
+[Altering Existing Tables](DOCUMENTATION.md#altering-existing-tables) guide.
 
 ## Why Pyloquent?
 
