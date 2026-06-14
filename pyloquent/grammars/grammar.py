@@ -788,6 +788,33 @@ class Grammar(ABC):
 
         statements = [sql]
 
+        # Add index statements for column-level modifiers
+        # (e.g. ``table.string("email").unique()``).
+        from pyloquent.schema.column import Index
+
+        for column in blueprint.columns:
+            if column.unique:
+                statements.append(
+                    self._compile_index(
+                        blueprint.table,
+                        Index(
+                            name=f"{blueprint.table}_{column.name}_unique",
+                            columns=[column.name],
+                            unique=True,
+                        ),
+                    )
+                )
+            elif column.index:
+                statements.append(
+                    self._compile_index(
+                        blueprint.table,
+                        Index(
+                            name=f"{blueprint.table}_{column.name}_index",
+                            columns=[column.name],
+                        ),
+                    )
+                )
+
         # Add index statements
         for index in blueprint.indexes:
             statements.append(self._compile_index(blueprint.table, index))
@@ -976,8 +1003,9 @@ class Grammar(ABC):
         else:
             sql_parts.append("NULL")
 
-        # Default
-        if column.default is not None:
+        # Default. An unset fluent modifier reads back as a callable proxy
+        # rather than a concrete value, so we explicitly skip those.
+        if column.default is not None and not callable(column.default):
             sql_parts.append(f"DEFAULT {self._compile_default_value(column.default)}")
 
         # Inline PRIMARY KEY (single-column PKs only; composite PKs are

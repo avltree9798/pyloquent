@@ -148,34 +148,30 @@ class DatabaseCommand(Command):
         self.migrations_path = migrations_path
         self.config_path = config_path
 
-    async def _get_connection(self):
-        """Get database connection from config or environment.
+    async def _get_manager(self):
+        """Build and connect a ConnectionManager from config or environment.
+
+        The schema builder resolves its connection through a
+        ConnectionManager (``manager.connection()``), so the CLI must construct
+        one rather than passing a raw connection. The manager is also
+        registered globally via :func:`set_manager` so that any migrations
+        referencing models resolve their connection correctly.
 
         Returns:
-            Database connection
+            A connected ConnectionManager.
         """
-        from pyloquent.database.connection import Connection
-        from pyloquent.database.sqlite_connection import SQLiteConnection
+        from pyloquent.database.manager import ConnectionManager, set_manager
 
-        # Try to load config
         config = await self._load_config()
+        if not config:
+            # Default to SQLite in-memory.
+            config = {"driver": "sqlite", "database": ":memory:"}
 
-        if config:
-            driver = config.get("driver", "sqlite")
-
-            if driver == "sqlite":
-                return SQLiteConnection(config)
-            elif driver == "postgres":
-                from pyloquent.database.postgres_connection import PostgresConnection
-
-                return PostgresConnection(config)
-            elif driver == "mysql":
-                from pyloquent.database.mysql_connection import MySQLConnection
-
-                return MySQLConnection(config)
-
-        # Default to SQLite in-memory
-        return SQLiteConnection({"database": ":memory:"})
+        manager = ConnectionManager()
+        manager.add_connection("default", config, default=True)
+        await manager.connect()
+        set_manager(manager)
+        return manager
 
     async def _load_config(self) -> Optional[Dict[str, Any]]:
         """Load database configuration.
@@ -217,15 +213,14 @@ class MigrateCommand(DatabaseCommand):
 
     async def handle(self) -> None:
         """Handle the command."""
-        connection = await self._get_connection()
-        await connection.connect()
+        from pyloquent.schema.builder import SchemaBuilder
+
+        manager = await self._get_manager()
 
         try:
-            from pyloquent.schema.builder import SchemaBuilder
-
-            schema = SchemaBuilder(connection)
+            schema = SchemaBuilder(manager)
             runner = MigrationRunner(
-                connection=connection,
+                connection=manager.connection(),
                 migrations_path=self.migrations_path,
                 schema=schema,
             )
@@ -240,7 +235,7 @@ class MigrateCommand(DatabaseCommand):
                 print("Nothing to migrate.")
 
         finally:
-            await connection.disconnect()
+            await manager.disconnect()
 
 
 class MigrateRollbackCommand(DatabaseCommand):
@@ -252,15 +247,14 @@ class MigrateRollbackCommand(DatabaseCommand):
         Args:
             steps: Number of batches to rollback
         """
-        connection = await self._get_connection()
-        await connection.connect()
+        from pyloquent.schema.builder import SchemaBuilder
+
+        manager = await self._get_manager()
 
         try:
-            from pyloquent.schema.builder import SchemaBuilder
-
-            schema = SchemaBuilder(connection)
+            schema = SchemaBuilder(manager)
             runner = MigrationRunner(
-                connection=connection,
+                connection=manager.connection(),
                 migrations_path=self.migrations_path,
                 schema=schema,
             )
@@ -275,7 +269,7 @@ class MigrateRollbackCommand(DatabaseCommand):
                 print("Nothing to rollback.")
 
         finally:
-            await connection.disconnect()
+            await manager.disconnect()
 
 
 class MigrateStatusCommand(DatabaseCommand):
@@ -283,15 +277,14 @@ class MigrateStatusCommand(DatabaseCommand):
 
     async def handle(self) -> None:
         """Handle the command."""
-        connection = await self._get_connection()
-        await connection.connect()
+        from pyloquent.schema.builder import SchemaBuilder
+
+        manager = await self._get_manager()
 
         try:
-            from pyloquent.schema.builder import SchemaBuilder
-
-            schema = SchemaBuilder(connection)
+            schema = SchemaBuilder(manager)
             runner = MigrationRunner(
-                connection=connection,
+                connection=manager.connection(),
                 migrations_path=self.migrations_path,
                 schema=schema,
             )
@@ -311,7 +304,7 @@ class MigrateStatusCommand(DatabaseCommand):
                     print(f"  [{status_icon}] {migration['name']}")
 
         finally:
-            await connection.disconnect()
+            await manager.disconnect()
 
 
 class MigrateFreshCommand(DatabaseCommand):
@@ -319,15 +312,14 @@ class MigrateFreshCommand(DatabaseCommand):
 
     async def handle(self) -> None:
         """Handle the command."""
-        connection = await self._get_connection()
-        await connection.connect()
+        from pyloquent.schema.builder import SchemaBuilder
+
+        manager = await self._get_manager()
 
         try:
-            from pyloquent.schema.builder import SchemaBuilder
-
-            schema = SchemaBuilder(connection)
+            schema = SchemaBuilder(manager)
             runner = MigrationRunner(
-                connection=connection,
+                connection=manager.connection(),
                 migrations_path=self.migrations_path,
                 schema=schema,
             )
@@ -337,4 +329,4 @@ class MigrateFreshCommand(DatabaseCommand):
             print(f"Ran {len(migrations)} migration(s)")
 
         finally:
-            await connection.disconnect()
+            await manager.disconnect()

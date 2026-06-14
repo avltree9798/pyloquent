@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] - 2026-06-14
+
+### Fixed
+
+- **Fluent column modifiers crashed with `'bool' object is not callable`** — chaining such as `table.string("uid").unique()` or `table.string("name").nullable(False)` raised a `TypeError` because `Column` was a dataclass whose `nullable` / `unique` / `index` / etc. were plain attributes, not callable setters. `Column` now backs every modifier with a non-data descriptor: reading (`column.nullable`) still returns the stored value (so grammars keep using `if not column.nullable` and identity checks keep working), while calling (`column.nullable()`) sets the modifier and returns the column for chaining. Supported chainable modifiers: `nullable`, `unsigned`, `primary`, `auto_increment`, `unique`, `index`, `first`, `change`, `default`, `comment`, `after`, `charset`, `collation`, `virtual_as`, `stored_as`, `srid`.
+  - Column-level `.unique()` / `.index()` now emit the matching `CREATE [UNIQUE] INDEX` statements from `compile_create_table`.
+  - The `DEFAULT` clause skips unset value modifiers (which read back as a callable proxy).
+  - Regression coverage in `tests/unit/test_blueprint_helpers.py`.
+
+- **`pyloquent migrate` (and `migrate:rollback` / `migrate:status` / `migrate:fresh`) failed with `'SQLiteConnection' object has no attribute 'connection'`** — the CLI constructed `SchemaBuilder(connection)` with a raw connection, but `SchemaBuilder` resolves its connection through a `ConnectionManager` (`manager.connection()`). The `DatabaseCommand` base now builds and connects a `ConnectionManager` from the loaded config, passes it to `SchemaBuilder`, hands the runner the underlying connection, and registers the manager globally via `set_manager` so migrations referencing models resolve correctly. Integration coverage in `tests/integration/test_cli_migrate.py`.
+
+### Notes
+
+- Both fixes were discovered in the wild by the downstream Ometsuke project.
+- Test count: **1078 passing, 4 skipped** (+17 from 0.3.5); 100% coverage maintained.
+
 ## [0.3.5] - 2026-05-12
 
 ### Tests
