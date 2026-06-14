@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.7] - 2026-06-14
+
+### Fixed
+
+- **`Model.create()` / `save()` crashed for non-incrementing string/UUID primary keys** — `_perform_insert` always force-assigned the database's integer `lastrowid` to the primary key, ignoring `__incrementing__`. A model with `__incrementing__ = False` and a caller-supplied string key (e.g. `id: str`) therefore had its key overwritten with an `int`, raising `pydantic_core.ValidationError: Input should be a valid string`. The insert path now honours `__incrementing__`: for non-incrementing single primary keys the row is inserted as-is and the caller's key is preserved. Regression coverage in `tests/integration/test_string_primary_key.py`.
+
+### Notes
+
+- Discovered in the wild by the downstream Ometsuke project.
+- Test count: **1081 passing, 4 skipped** (+3 from 0.3.6); 100% coverage maintained.
+
 ## [0.3.6] - 2026-06-14
 
 ### Fixed
