@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.10] - 2026-06-17
+
+### Fixed
+
+- **`make:migration --model` emitted invalid Python for enum defaults** — the migration generator rendered a field's default via `repr()`. For a `str`/`int`-based enum (e.g. `class Status(str, Enum)`) `isinstance(value, str)` is `True`, but `repr(Status.ACTIVE)` is `"<Status.ACTIVE: 'active'>"` — not valid Python — so a generated line became `table.string("status").default(<Status.ACTIVE: 'active'>)`, which fails to import/compile. `_render_default` now unwraps `enum.Enum` members to their underlying `.value` first, producing `table.string("status").default('active')`. Regression coverage in `tests/unit/test_migration_generator.py`.
+
+### Notes
+
+- Discovered in the wild generating migrations for a downstream FastAPI/Pyloquent project whose models use `str`-based enums for status fields.
+- Test count: **1134 passing** (+2 from 0.3.9); 100% coverage maintained.
+
 ## [0.3.9] - 2026-06-17
 
 ### Fixed

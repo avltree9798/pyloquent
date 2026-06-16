@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 from typing import Optional
 
 from pyloquent.migrations.generator import (
@@ -24,6 +25,26 @@ class GenUser(Model):
     bio: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+class GenStatus(str, Enum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class GenPriority(int, Enum):
+    LOW = 1
+    HIGH = 3
+
+
+class GenWidget(Model):
+    __table__ = "gen_widgets"
+    __timestamps__ = False
+    __fillable__ = ["status", "priority"]
+
+    id: Optional[int] = None
+    status: GenStatus = GenStatus.ACTIVE
+    priority: GenPriority = GenPriority.LOW
 
 
 class GenToken(Model):
@@ -64,6 +85,29 @@ def test_generated_create_migration_is_valid_python():
     assert "class CreateGenUsersTable(Migration)" in source
     assert 'schema.create("gen_users"' in source
     assert 'schema.drop("gen_users")' in source
+
+
+def test_enum_defaults_render_underlying_value():
+    """Enum defaults must render as their ``.value``, not the enum ``repr``.
+
+    Regression: a ``str``/``int``-based enum default was rendered via ``repr``
+    (e.g. ``<GenStatus.ACTIVE: 'active'>``), producing invalid Python.
+    """
+    lines = generate_create_lines(GenWidget)
+    # str-enum default -> the underlying string value
+    assert any('"status"' in line and ".default('active')" in line for line in lines)
+    # int-enum default -> the underlying int value
+    assert any('"priority"' in line and ".default(1)" in line for line in lines)
+    # The broken enum repr must not appear anywhere.
+    assert not any("<GenStatus" in line or "<GenPriority" in line for line in lines)
+
+
+def test_generated_migration_with_enum_defaults_is_valid_python():
+    source = generate_create_migration(GenWidget)
+    # The enum-repr bug produced a SyntaxError here; this must compile cleanly.
+    compile(source, "<generated>", "exec")
+    assert ".default('active')" in source
+    assert "<GenStatus" not in source
 
 
 def test_diff_columns_add_and_drop():

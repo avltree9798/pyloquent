@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime
 import decimal
+import enum
 import typing
 import uuid
 from typing import Any, List, Optional, Tuple, Type
@@ -75,7 +76,16 @@ def _resolve_method(annotation: Any) -> str:
 
 
 def _render_default(value: Any) -> Optional[str]:
-    """Render a literal default for ``.default(...)``, or None to skip."""
+    """Render a literal default for ``.default(...)``, or None to skip.
+
+    ``Enum`` members are unwrapped to their underlying ``.value`` first. This is
+    essential for ``str``/``int``-based enums (e.g. ``class Status(str, Enum)``):
+    ``isinstance(Status.ACTIVE, str)`` is ``True`` but ``repr(Status.ACTIVE)``
+    is ``"<Status.ACTIVE: 'active'>"`` — invalid Python that would break the
+    generated migration. Rendering ``repr(value.value)`` yields ``"'active'"``.
+    """
+    if isinstance(value, enum.Enum):
+        value = value.value
     if isinstance(value, bool):
         return repr(value)
     if isinstance(value, (int, float, str)):

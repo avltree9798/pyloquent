@@ -1241,7 +1241,10 @@ The generator maps field annotations to columns: `str → string`,
 `Optional[...]` becomes `.nullable()`, literal defaults become `.default(...)`,
 `created_at`/`updated_at` collapse into `table.timestamps()`, and a
 soft-delete model's `deleted_at` becomes `table.soft_deletes()`. The primary
-key honours `__primary_key__`, `__incrementing__` and `__key_type__`.
+key honours `__primary_key__`, `__incrementing__` and `__key_type__`. Enum
+defaults (including `str`/`int`-based enums) are rendered as their underlying
+`.value` — e.g. a `status: Status = Status.ACTIVE` field becomes
+`table.string('status').default('active')`.
 
 ### Diffing a Model Against the Live Database
 
