@@ -404,6 +404,8 @@ replica = await user.replicate({'email': 'copy@example.com'})
 user.make_visible('secret_field')
 user.make_hidden('internal_field')
 d = user.to_dict()   # respects __hidden__ / make_visible / make_hidden
+# __hidden__ is enforced by Pydantic's core serialiser, so it also applies to
+# model_dump_json() and FastAPI response_model — hidden fields never leak.
 
 # Change tracking
 await user.save()
@@ -627,6 +629,13 @@ app = FastAPI(lifespan=lifespan)
 @app.get('/users')
 async def list_users(page: int = 1):
     return await User.paginate(per_page=20, page=page)
+
+# A model can be used directly as a response_model. Fields listed in __hidden__
+# are stripped from the response by Pydantic's core serialiser — no leak, and no
+# separate read schema required.
+@app.get('/users/{id}', response_model=User)
+async def get_user(id: int):
+    return await User.find_or_fail(id)
 ```
 
 ## Available Drivers

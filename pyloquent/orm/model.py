@@ -12,7 +12,13 @@ from typing import (
     get_type_hints,
 )
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    PrivateAttr,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+)
 
 from pyloquent.exceptions import MassAssignmentException, ModelNotFoundException
 from pyloquent.orm.collection import Collection
@@ -959,15 +965,39 @@ class Model(BaseModel, metaclass=ModelMeta):
     # Serialization
     # ========================================================================
 
-    def to_dict(self, **kwargs) -> Dict[str, Any]:
-        """Convert model to dictionary.
+    @model_serializer(mode="wrap")
+    def _pyloquent_serialise(self, handler: SerializerFunctionWrapHandler):
+        """Apply Pyloquent's serialisation rules through Pydantic's core.
 
-        Respects __hidden__, __visible__, __appends__, and instance overrides.
+        Honours ``__hidden__``, ``__visible__``, ``__appends__`` and the
+        per-instance overrides set by :meth:`make_hidden`, :meth:`make_visible`
+        and :meth:`append`.
+
+        Registering the rules as a Pydantic ``model_serializer`` (rather than
+        only overriding :meth:`model_dump`) is essential: several serialisation
+        paths bypass a plain ``model_dump`` override and call the core (Rust)
+        serialiser directly. Those include ``model_dump_json``, recursive
+        serialisation of nested models, and — most importantly —
+        ``TypeAdapter(Model).dump_python`` which is exactly what FastAPI uses to
+        render a ``response_model``. Without this hook a column listed in
+        ``__hidden__`` would still leak through a FastAPI response.
+
+        Note:
+            This method deliberately has **no return annotation**. Annotating it
+            as ``-> Dict[str, Any]`` tells Pydantic the serialised output is an
+            untyped object and collapses the model's JSON ``serialization``
+            schema to ``{"type": "object", "additionalProperties": true}`` —
+            which wipes the field list from a FastAPI ``response_model`` schema.
+            Leaving it unannotated preserves the field-based output schema.
+
+        Args:
+            handler: Pydantic's default wrap handler producing the unfiltered
+                serialised mapping.
 
         Returns:
-            Dictionary representation
+            The filtered dictionary representation.
         """
-        data = super().model_dump(**kwargs)
+        data = handler(self)
 
         # Determine effective hidden list (instance overrides class)
         hidden = self._instance_hidden if self._instance_hidden is not None else list(self.__hidden__)
@@ -991,6 +1021,19 @@ class Model(BaseModel, metaclass=ModelMeta):
 
         return data
 
+    def to_dict(self, **kwargs) -> Dict[str, Any]:
+        """Convert model to dictionary.
+
+        Respects __hidden__, __visible__, __appends__, and instance overrides.
+        The filtering itself lives in the registered model serialiser
+        (:meth:`_pyloquent_serialise`) so it applies uniformly to every
+        serialisation path.
+
+        Returns:
+            Dictionary representation
+        """
+        return super().model_dump(**kwargs)
+
     def to_array(self) -> Dict[str, Any]:
         """Alias for to_dict.
 
@@ -1000,12 +1043,17 @@ class Model(BaseModel, metaclass=ModelMeta):
         return self.to_dict()
 
     def model_dump(self, **kwargs) -> Dict[str, Any]:
-        """Override Pydantic's model_dump to respect hidden fields.
+        """Dump the model as a dictionary, honouring hidden fields.
+
+        The hiding/visibility/appends logic is applied by the registered
+        ``model_serializer`` (:meth:`_pyloquent_serialise`); this override only
+        preserves the documented ``Dict[str, Any]`` return type and keeps
+        parity with :meth:`to_dict`.
 
         Returns:
             Dictionary representation
         """
-        return self.to_dict(**kwargs)
+        return super().model_dump(**kwargs)
 
     def json(self, **kwargs) -> str:
         """Convert model to JSON string.

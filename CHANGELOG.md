@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.9] - 2026-06-17
+
+### Fixed
+
+- **`__hidden__` fields leaked through FastAPI `response_model`** — Pyloquent only overrode the Python-level `Model.model_dump()` to strip `__hidden__` / honour `__visible__` / `__appends__`. FastAPI serialises responses with `TypeAdapter(Model).dump_python()`, which calls Pydantic's *core* (Rust) serialiser and bypasses that override entirely — so a column listed in `__hidden__` (e.g. `password`, `secret`) was still returned in the HTTP response. The same gap affected `model_dump_json()` and the recursive serialisation of nested/related models. The rules are now registered as a Pydantic `model_serializer` (`Model._pyloquent_serialise`), so they apply uniformly across `model_dump()`, `model_dump_json()`, nested serialisation, and FastAPI `response_model`. Regression coverage in `tests/unit/test_serialization_hidden.py` and `tests/integration/test_fastapi_response_model.py`.
+
+### Notes
+
+- The serialiser is intentionally left without a `-> Dict[str, Any]` return annotation: annotating it would collapse the model's JSON `serialization` schema to a bare object and erase the field list from a FastAPI `response_model` OpenAPI schema. The single-component `Model` schema (and its documented fields) is preserved.
+- Discovered in the wild by a downstream FastAPI project.
+- Test count: **1132 passing** (+12 from 0.3.8); 100% coverage maintained.
+
 ## [0.3.8] - 2026-06-14
 
 ### Added

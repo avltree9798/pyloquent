@@ -202,6 +202,14 @@ d = user.to_dict()                    # respects all overrides
 j = user.json()                       # JSON string
 ```
 
+> **Enforced by Pydantic's core serialiser.** `__hidden__` / `__visible__` /
+> `__appends__` are applied through a registered Pydantic `model_serializer`, not
+> only by `to_dict()`. They are therefore honoured by **every** serialisation path —
+> `model_dump()`, `model_dump_json()`, nested serialisation of related models, and
+> `TypeAdapter(Model).dump_python()`, which is exactly how **FastAPI renders a
+> `response_model`**. A field listed in `__hidden__` will never leak through a
+> FastAPI response. See [FastAPI Integration](#fastapi-integration).
+
 ### Instance Methods
 
 ```python
@@ -1387,6 +1395,37 @@ async def delete_user(id: int):
     await user.delete()
     return {'message': 'Deleted'}
 ```
+
+### Models as `response_model`
+
+A Pyloquent model *is* a Pydantic model, so it can be used directly as a FastAPI
+`response_model`. Because the `__hidden__` rules are applied through Pydantic's core
+serialiser (the same one FastAPI uses), hidden columns are stripped from the HTTP
+response automatically — there is no need for a separate read schema:
+
+```python
+class User(Model):
+    __table__    = 'users'
+    __fillable__ = ['name', 'email', 'password']
+    __hidden__   = ['password']        # never serialised to the client
+
+    id: Optional[int] = None
+    name: str
+    email: str
+    password: Optional[str] = None
+
+@app.post('/users', response_model=User)
+async def create_user(payload: User):
+    # payload.password is readable here, but the response omits it
+    return await User.create(payload.to_dict() | {'password': payload.password})
+
+@app.get('/users/{id}', response_model=User)
+async def get_user(id: int):
+    return await User.find_or_fail(id)   # 'password' is stripped from the JSON
+```
+
+> **Note.** The request body schema still accepts `password` (it is a fillable
+> input), while the serialised response never includes it.
 
 ---
 
