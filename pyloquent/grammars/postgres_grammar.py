@@ -239,6 +239,30 @@ class PostgresGrammar(Grammar):
         )
 
     # ========================================================================
+    # Schema DDL
+    # ========================================================================
+
+    def _compile_default_value(self, value: Any) -> str:
+        """Compile a column default literal for PostgreSQL.
+
+        PostgreSQL is strictly typed: a ``BOOLEAN`` column rejects the integer
+        literals ``0`` / ``1`` that the base grammar emits (``DEFAULT 0`` raises
+        ``column "x" is of type boolean but default expression is of type
+        integer``). SQLite and MySQL accept ``0`` / ``1``, so the divergence is
+        handled here per AGENTS.md. Booleans render as the SQL keywords
+        ``TRUE`` / ``FALSE``; everything else defers to the base implementation.
+
+        Args:
+            value: Default value.
+
+        Returns:
+            Default value SQL literal.
+        """
+        if isinstance(value, bool):
+            return "TRUE" if value else "FALSE"
+        return super()._compile_default_value(value)
+
+    # ========================================================================
     # Schema Alteration
     # ========================================================================
 

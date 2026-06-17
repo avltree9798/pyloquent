@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.12] - 2026-06-17
+
+### Fixed
+
+- **Boolean column defaults produced invalid DDL on PostgreSQL** — the base grammar compiled a `bool` default to the integer literal `0` / `1`. SQLite and MySQL accept that, but PostgreSQL is strictly typed and rejects `DEFAULT 0` on a `BOOLEAN` column (`column "x" is of type boolean but default expression is of type integer`). `PostgresGrammar` now overrides `_compile_default_value` to render booleans as the `TRUE` / `FALSE` keywords, so `table.boolean('flag').default(False)` emits `DEFAULT FALSE` on PostgreSQL while SQLite/MySQL keep `DEFAULT 0`. Applies to both `CREATE TABLE` and `ALTER TABLE ... SET DEFAULT` (`.change()`). Coverage in `tests/unit/test_mysql_postgres_grammar.py` (incl. a MySQL guard that defaults stay `0` / `1`).
+
+### Notes
+
+- Surfaced running generated migrations against PostgreSQL where SQLite had silently accepted the integer literal. Boolean column defaults are now portable across all three engines — no need to strip them from migrations.
+- Test count: **1143 passing** (+5 from 0.3.11); 100% coverage maintained.
+
 ## [0.3.11] - 2026-06-17
 
 ### Fixed

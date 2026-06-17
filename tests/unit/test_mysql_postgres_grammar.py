@@ -3,6 +3,8 @@ from unittest.mock import MagicMock
 from pyloquent.grammars.mysql_grammar import MySQLGrammar
 from pyloquent.grammars.postgres_grammar import PostgresGrammar
 from pyloquent.query.builder import QueryBuilder
+from pyloquent.schema.blueprint import Blueprint
+from pyloquent.schema.column import Column
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +71,13 @@ class TestMySQLGrammar:
         qb = mysql_qb().from_("users")
         sql, _ = g.compile_delete(qb)
         assert "ORDER BY" not in sql.upper()
+
+    def test_boolean_default_stays_integer(self):
+        # MySQL BOOLEAN is TINYINT(1); DEFAULT 0/1 is valid and must be kept
+        # (regression guard so the PostgreSQL fix does not leak into MySQL).
+        g = MySQLGrammar()
+        assert g._compile_default_value(False) == "0"
+        assert g._compile_default_value(True) == "1"
 
 
 # ===========================================================================
@@ -139,3 +148,30 @@ class TestPostgresGrammar:
         qb = pg_qb().from_("users")
         sql, bindings = g._compile_update(qb, {"name": "Dave"})
         assert "UPDATE" in sql
+
+    # -- Boolean defaults: PostgreSQL is strictly typed and rejects DEFAULT 0/1
+    #    on a BOOLEAN column, so they must render as TRUE / FALSE keywords.
+
+    def test_boolean_default_renders_keyword(self):
+        g = PostgresGrammar()
+        assert g._compile_default_value(False) == "FALSE"
+        assert g._compile_default_value(True) == "TRUE"
+
+    def test_non_boolean_defaults_delegate_to_base(self):
+        g = PostgresGrammar()
+        assert g._compile_default_value(0) == "0"
+        assert g._compile_default_value(None) == "NULL"
+
+    def test_boolean_default_in_create_table(self):
+        g = PostgresGrammar()
+        bp = Blueprint("things")
+        bp.boolean("is_active").default(False)
+        sql = g.compile_create_table(bp)[0]
+        assert "DEFAULT FALSE" in sql
+        assert "DEFAULT 0" not in sql
+
+    def test_boolean_default_in_change_column(self):
+        g = PostgresGrammar()
+        col = Column(name="is_active", type="boolean", default=False, nullable=False)
+        statements = g._compile_change_column("things", col)
+        assert any("SET DEFAULT FALSE" in s for s in statements)
