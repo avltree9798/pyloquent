@@ -48,3 +48,55 @@ async def test_updated_at_refreshed_on_save(sqlite_db, ts_table):
     m.name = "After"
     await m.save()
     assert m._original.get("updated_at") is not None
+
+
+# ---------------------------------------------------------------------------
+# Timestamps must also be set on the in-memory INSTANCE (not just _original /
+# the DB row), otherwise a freshly saved model serialises them as null.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_timestamps_set_on_instance_after_create(sqlite_db, ts_table):
+    m = await TsModel.create({"name": "WithTs"})
+    assert m.created_at is not None
+    assert m.updated_at is not None
+
+
+@pytest.mark.asyncio
+async def test_timestamps_serialised_after_create(sqlite_db, ts_table):
+    m = await TsModel.create({"name": "WithTs"})
+    data = m.to_dict()
+    assert data["created_at"] is not None
+    assert data["updated_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_updated_at_set_on_instance_after_save(sqlite_db, ts_table):
+    m = await TsModel.create({"name": "Before"})
+    before = m.updated_at
+    m.name = "After"
+    await m.save()
+    assert m.updated_at is not None
+    assert m.updated_at != before
+
+
+# ---------------------------------------------------------------------------
+# Data integrity: created_at must survive a subsequent update. Previously the
+# instance attribute was None while _original held the real value, so the next
+# save() treated created_at as dirty and wrote NULL back over it.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_created_at_survives_update(sqlite_db, ts_table):
+    m = await TsModel.create({"name": "Before"})
+    original_created = m.created_at
+    assert original_created is not None
+
+    m.name = "After"
+    await m.save()
+
+    # In-memory instance keeps created_at unchanged...
+    assert m.created_at == original_created
+    # ...and the persisted row was not nulled out.
+    reloaded = await TsModel.find(m.id)
+    assert reloaded.created_at is not None

@@ -151,10 +151,18 @@ class Model(BaseModel, metaclass=ModelMeta):
             from datetime import datetime
 
             now = datetime.now()
+            # Set on both the DB payload AND the in-memory instance. Without the
+            # ``setattr`` the freshly created model serialises ``created_at`` /
+            # ``updated_at`` as ``None`` (they only exist in the row), and — worse
+            # — ``self._original`` then holds the real timestamp while the
+            # attribute is ``None``, so the next ``save()`` sees the column as
+            # dirty and writes ``NULL`` back over the real value.
             if "created_at" in self.__class__.model_fields:
                 attributes["created_at"] = now
+                setattr(self, "created_at", now)
             if "updated_at" in self.__class__.model_fields:
                 attributes["updated_at"] = now
+                setattr(self, "updated_at", now)
 
         # Insert and get ID
         query = self._new_query()
@@ -211,7 +219,12 @@ class Model(BaseModel, metaclass=ModelMeta):
             from datetime import datetime
 
             if "updated_at" in self.__class__.model_fields:
-                dirty["updated_at"] = datetime.now()
+                now = datetime.now()
+                dirty["updated_at"] = now
+                # Mirror onto the instance so the in-memory model reflects the
+                # new ``updated_at`` after ``save()`` (and stays in sync with
+                # ``self._original`` to avoid a false-dirty re-write next save).
+                setattr(self, "updated_at", now)
 
         # Apply casts symmetrically with INSERT — without this, `__casts__`
         # decodes on read but never re-encodes on update, so a model that

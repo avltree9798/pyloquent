@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.11] - 2026-06-17
+
+### Fixed
+
+- **Auto-timestamps were not written back to the in-memory model on `save()`** — `_perform_insert` / `_perform_update` set `created_at` / `updated_at` in the database payload and in `self._original`, but never on the instance attributes. Two consequences:
+  1. A freshly created or updated model serialised `created_at` / `updated_at` as `null` (the row had the values, the Python object did not).
+  2. **Data loss:** because `self._original` held the real timestamp while the attribute stayed `None`, the *next* `save()` saw `created_at` as dirty and issued `UPDATE … SET created_at = NULL`, destroying the original creation time.
+  Both insert and update paths now `setattr` the timestamps onto the instance, so the model reflects them immediately and `created_at` survives subsequent updates. Regression coverage in `tests/integration/test_model_timestamps.py` (asserts the **instance** attributes and round-trips an update — the previous tests only checked `self._original`, which is why the gap was missed).
+
+### Notes
+
+- Discovered while auditing serialised timestamps in a downstream GRC project.
+- Test count: **1138 passing** (+4 from 0.3.10); 100% coverage maintained.
+
 ## [0.3.10] - 2026-06-17
 
 ### Fixed
