@@ -89,3 +89,30 @@ async def test_drop_primary_raises_on_sqlite(sqlite_db):
 
     with pytest.raises(NotImplementedError):
         await schema.table("widgets2", lambda t: t.drop_primary())
+
+
+# ---------------------------------------------------------------------------
+# Raw statement escape hatch — for DDL the Blueprint does not model (e.g.
+# PostgreSQL row-level security). Verified here against SQLite.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_statement_executes_raw_ddl(sqlite_db):
+    schema = SchemaBuilder(sqlite_db)
+    await schema.statement(
+        "CREATE TABLE raw_made (id INTEGER PRIMARY KEY, label TEXT)"
+    )
+    assert await schema.has_table("raw_made")
+
+
+@pytest.mark.asyncio
+async def test_statement_passes_bindings(sqlite_db):
+    schema = SchemaBuilder(sqlite_db)
+    await schema.create("raw_rows", lambda t: [t.id(), t.string("name")])
+
+    await schema.statement("INSERT INTO raw_rows (name) VALUES (?)", ["Alice"])
+
+    conn = sqlite_db.connection()
+    row = await conn.fetch_one("SELECT name FROM raw_rows WHERE name = ?", ["Alice"])
+    assert row is not None
+    assert row["name"] == "Alice"

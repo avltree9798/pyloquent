@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.13] - 2026-06-17
+
+### Added
+
+- **`SchemaBuilder.statement(sql, bindings=None)`** — a raw-SQL escape hatch for migrations, mirroring Laravel's `DB::statement()`. The fluent Blueprint models tables/columns/indexes/foreign keys, but engine-specific DDL it does not cover — PostgreSQL **row-level security** (`ALTER TABLE … ENABLE ROW LEVEL SECURITY`, `CREATE POLICY …`), extensions, triggers, functions, materialised views — previously forced apps to reach into `get_manager().connection()` internals from inside a migration. `await schema.statement(...)` now runs raw DDL/DML on the migration's connection as a first-class, documented operation (optional positional `bindings` for parameterised SQL). Coverage in `tests/integration/test_schema_alter.py`.
+
+### Notes
+
+- Requested by a downstream app whose PostgreSQL RLS migrations had no supported expression path through the schema builder.
+- Raw statements are passed through verbatim, so dialect-specific DDL only runs on that engine — guard it if your migrations target multiple databases.
+- Test count: **1145 passing** (+2 from 0.3.12); 100% coverage maintained.
+
 ## [0.3.12] - 2026-06-17
 
 ### Fixed

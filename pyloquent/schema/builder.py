@@ -1,6 +1,6 @@
 """Schema builder for executing DDL operations."""
 
-from typing import TYPE_CHECKING, Callable, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, List, Optional
 
 if TYPE_CHECKING:
     from pyloquent.database.manager import ConnectionManager
@@ -138,6 +138,39 @@ class SchemaBuilder:
 
         sql = grammar.compile_rename_table(from_table, to_table)
         await conn.execute(sql)
+
+    async def statement(self, sql: str, bindings: Optional[List[Any]] = None) -> None:
+        """Execute a raw SQL statement against the schema connection.
+
+        An escape hatch for DDL that the fluent Blueprint does not model — for
+        example PostgreSQL row-level security (``ALTER TABLE ... ENABLE ROW
+        LEVEL SECURITY`` / ``CREATE POLICY ...``), extensions, triggers,
+        functions, or materialised views. Mirrors Laravel's ``DB::statement()``.
+
+        This is the supported way to run engine-specific DDL inside a migration
+        without reaching into the connection manager internals.
+
+        Args:
+            sql: Raw SQL to execute.
+            bindings: Optional positional bindings for parameterised SQL.
+
+        Example:
+            async def up(self, schema: SchemaBuilder) -> None:
+                await schema.create("documents", lambda t: [
+                    t.id(),
+                    t.string("org_id"),
+                ])
+                # PostgreSQL-only row-level security (no fluent API for this):
+                await schema.statement(
+                    "ALTER TABLE documents ENABLE ROW LEVEL SECURITY"
+                )
+                await schema.statement(
+                    "CREATE POLICY org_isolation ON documents "
+                    "USING (org_id = current_setting('app.current_org'))"
+                )
+        """
+        conn = self._manager.connection()
+        await conn.execute(sql, bindings)
 
     async def has_table(self, table: str) -> bool:
         """Check if table exists.

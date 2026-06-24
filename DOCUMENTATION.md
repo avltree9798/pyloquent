@@ -1224,6 +1224,49 @@ await schema.table('users', lambda table: [
 > `.change()`** raise `NotImplementedError` — recreate the table instead
 > (create new → copy rows → drop old → rename).
 
+### Raw SQL & Unsupported DDL (PostgreSQL RLS, etc.)
+
+The fluent Blueprint covers tables, columns, indexes and foreign keys. For
+engine-specific DDL it does not model — PostgreSQL **row-level security**,
+extensions, triggers, functions, materialised views — use
+`schema.statement()` (the equivalent of Laravel's `DB::statement()`). It runs
+raw SQL on the migration's connection, so you do not have to reach into the
+connection manager:
+
+```python
+from pyloquent.migrations import Migration
+from pyloquent.schema import SchemaBuilder
+
+class AddDocumentsRls(Migration):
+    async def up(self, schema: SchemaBuilder) -> None:
+        await schema.create('documents', lambda t: [
+            t.id(),
+            t.string('org_id'),
+            t.text('body'),
+            t.timestamps(),
+        ])
+        # PostgreSQL-only — no fluent API models this:
+        await schema.statement('ALTER TABLE documents ENABLE ROW LEVEL SECURITY')
+        await schema.statement(
+            "CREATE POLICY org_isolation ON documents "
+            "USING (org_id = current_setting('app.current_org'))"
+        )
+
+    async def down(self, schema: SchemaBuilder) -> None:
+        await schema.statement('DROP POLICY IF EXISTS org_isolation ON documents')
+        await schema.drop('documents')
+```
+
+`statement()` also accepts positional bindings for parameterised SQL:
+
+```python
+await schema.statement('INSERT INTO settings (key, value) VALUES (?, ?)', ['theme', 'dark'])
+```
+
+> **Portability.** Raw statements are passed through verbatim, so anything
+> engine-specific (like RLS) only runs on that engine. Guard dialect-specific
+> DDL if your migrations target more than one database.
+
 ### Generating Migrations from Models
 
 Because Pyloquent models declare typed Pydantic fields, you can scaffold a
