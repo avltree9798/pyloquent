@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.17] - 2026-06-17
+
+### Fixed / Added
+
+Completes the cross-dialect grammar audit — the remaining items from the 0.3.16 notes are now resolved:
+
+- **`ilike` is now portable (Fixed)** — `where(col, 'ilike', x)` was emitted verbatim on every dialect, but only PostgreSQL has `ILIKE`; MySQL and SQLite raised a syntax error. A new `Grammar._compile_operator()` hook (driven by `supports_ilike()`) keeps native `ILIKE` on PostgreSQL and translates `ilike` / `not ilike` → `LIKE` / `NOT LIKE` (case-insensitive by default) on MySQL and SQLite. Applies to `WHERE` and `HAVING`.
+- **`enum` via `.change()` on PostgreSQL (Fixed)** — `_compile_change_column` emitted `ALTER COLUMN ... TYPE VARCHAR(255) CHECK (...)`, which PostgreSQL rejects (a `CHECK` cannot live in a `TYPE` clause). It now changes the type to a plain `VARCHAR(255)` (with a `USING` cast) and adds the allowed-values constraint as a separate `ADD CONSTRAINT ... CHECK` statement.
+- **Timezone-aware types on PostgreSQL (Fixed)** — `date_time_tz` / `timestamp_tz` / `time_tz` mapped to a plain `TIMESTAMP` / `TIME` (not timezone-aware). They now render `TIMESTAMP[(p)] WITH TIME ZONE` / `TIME[(p)] WITH TIME ZONE`.
+- **Table `engine` / `charset` / `collation` / `comment` are now emitted (Added)** — previously stored on the Blueprint but silently dropped. MySQL emits them as table options (`ENGINE=… DEFAULT CHARACTER SET … COLLATE … COMMENT=…`); PostgreSQL emits a separate `COMMENT ON TABLE … IS …` statement (charset/collation are not table-level there); SQLite emits nothing. Wired via overridable `_compile_create_table_options()` / `_compile_post_create_statements()` hooks. String literals (comments) use the `''`-escaping `_quote_string` helper.
+
+### Notes
+
+- Cross-dialect grammar audit (0.3.12, 0.3.14–0.3.17) is now complete: boolean defaults, MySQL-only column types, enum/set, `UNSIGNED`, string-default escaping, `ilike`, tz types, and table options all behave correctly on SQLite / MySQL / PostgreSQL.
+- Test count: **1168 passing** (+7 from 0.3.16); 100% coverage maintained.
+
 ## [0.3.16] - 2026-06-17
 
 ### Fixed

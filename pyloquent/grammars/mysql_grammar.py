@@ -56,6 +56,31 @@ class MySQLGrammar(Grammar):
         """
         return "%s"
 
+    def _compile_create_table_options(self, blueprint: "Blueprint") -> str:
+        """Emit MySQL table options (``ENGINE`` / ``CHARSET`` / ``COLLATE`` /
+        ``COMMENT``) set on the blueprint.
+
+        These were previously stored but never rendered. They are MySQL-only —
+        SQLite emits nothing (base) and PostgreSQL renders a separate
+        ``COMMENT ON TABLE`` statement instead.
+
+        Args:
+            blueprint: Table blueprint.
+
+        Returns:
+            A leading-space string of table options, or ``""`` when none set.
+        """
+        opts: List[str] = []
+        if blueprint._engine:
+            opts.append(f"ENGINE={blueprint._engine}")
+        if blueprint._charset:
+            opts.append(f"DEFAULT CHARACTER SET {blueprint._charset}")
+        if blueprint._collation:
+            opts.append(f"COLLATE {blueprint._collation}")
+        if blueprint._comment is not None:
+            opts.append(f"COMMENT={self._quote_string(blueprint._comment)}")
+        return (" " + " ".join(opts)) if opts else ""
+
     def compile_update(self, query: "QueryBuilder", values: dict) -> Tuple[str, List[Any]]:
         """Compile an UPDATE query.
 

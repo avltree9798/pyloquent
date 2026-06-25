@@ -99,6 +99,31 @@ class TestMySQLGrammar:
         col = Column(name="user_id", type="big_integer", unsigned=True, nullable=False)
         assert "UNSIGNED" in g._compile_column(col)
 
+    def test_ilike_translated_to_like(self):
+        # MySQL has no ILIKE — it must become LIKE (case-insensitive by default).
+        sql, _ = mysql_qb().from_("t").where("name", "ilike", "%a%").to_sql()
+        assert "ilike" not in sql.lower()
+        assert "like" in sql.lower()
+
+    def test_not_ilike_translated_to_not_like(self):
+        g = MySQLGrammar()
+        assert g._compile_operator("not ilike") == "not like"
+        assert g._compile_operator("=") == "="
+
+    def test_table_options_emitted(self):
+        g = MySQLGrammar()
+        bp = Blueprint("logs")
+        bp.engine("InnoDB")
+        bp.charset("utf8mb4")
+        bp.collation("utf8mb4_unicode_ci")
+        bp.comment("hi")
+        bp.string("msg")
+        sql = g.compile_create_table(bp)[0]
+        assert "ENGINE=InnoDB" in sql
+        assert "DEFAULT CHARACTER SET utf8mb4" in sql
+        assert "COLLATE utf8mb4_unicode_ci" in sql
+        assert "COMMENT='hi'" in sql
+
 
 # ===========================================================================
 # PostgresGrammar
@@ -276,3 +301,48 @@ class TestPostgresGrammar:
         # Must be a single-quoted literal with '' escaping, never a
         # double-quoted identifier (which PostgreSQL would reject).
         assert g._compile_default_value("O'Brien") == "'O''Brien'"
+
+    def test_ilike_kept(self):
+        # PostgreSQL natively supports ILIKE — it must be preserved.
+        sql, _ = pg_qb().from_("t").where("name", "ilike", "%a%").to_sql()
+        assert "ilike" in sql.lower()
+
+    def test_tz_types_use_with_time_zone(self):
+        g = PostgresGrammar()
+        assert g._compile_column_type(Column(name="c", type="timestamp_tz")) == "TIMESTAMP WITH TIME ZONE"
+        assert g._compile_column_type(Column(name="c", type="date_time_tz")) == "TIMESTAMP WITH TIME ZONE"
+        assert g._compile_column_type(Column(name="c", type="time_tz")) == "TIME WITH TIME ZONE"
+        assert (
+            g._compile_column_type(Column(name="c", type="timestamp_tz", precision=6))
+            == "TIMESTAMP(6) WITH TIME ZONE"
+        )
+        assert (
+            g._compile_column_type(Column(name="c", type="time_tz", precision=3))
+            == "TIME(3) WITH TIME ZONE"
+        )
+
+    def test_enum_change_splits_type_and_check(self):
+        g = PostgresGrammar()
+        col = Column(name="status", type="enum", allowed=["active", "inactive"], nullable=False)
+        statements = g._compile_change_column("accounts", col)
+        # Type change is a plain VARCHAR (with USING cast); CHECK is separate.
+        assert any("TYPE VARCHAR(255) USING" in s for s in statements)
+        assert any(
+            'ADD CONSTRAINT "accounts_status_check" CHECK ("status" IN (' in s
+            for s in statements
+        )
+        # No CHECK fused into the TYPE clause (which PostgreSQL would reject).
+        assert not any("TYPE VARCHAR(255) CHECK" in s for s in statements)
+
+    def test_table_comment_emitted_as_separate_statement(self):
+        g = PostgresGrammar()
+        bp = Blueprint("logs")
+        bp.charset("utf8mb4")  # ignored on PostgreSQL
+        bp.comment("audit log")
+        bp.string("msg")
+        statements = g.compile_create_table(bp)
+        assert statements[0].startswith('CREATE TABLE "logs"')
+        assert "CHARACTER SET" not in statements[0]
+        assert any(
+            s == 'COMMENT ON TABLE "logs" IS \'audit log\'' for s in statements
+        )

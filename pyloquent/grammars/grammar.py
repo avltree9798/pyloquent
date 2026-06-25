@@ -405,6 +405,35 @@ class Grammar(ABC):
 
         return " ".join(sql_parts), bindings
 
+    def supports_ilike(self) -> bool:
+        """Whether the dialect supports the ``ILIKE`` operator.
+
+        Only PostgreSQL does; its grammar overrides this to ``True``.
+        """
+        return False
+
+    def _compile_operator(self, operator: str) -> str:
+        """Normalise a comparison operator for the dialect.
+
+        ``ILIKE`` / ``NOT ILIKE`` are PostgreSQL-only. On dialects without it
+        (MySQL, SQLite) they would raise a syntax error, so they are translated
+        to ``LIKE`` / ``NOT LIKE`` — both case-insensitive by default on those
+        engines — keeping a query written with ``ilike`` portable.
+
+        Args:
+            operator: The comparison operator as supplied to the builder.
+
+        Returns:
+            The operator to emit for this dialect.
+        """
+        if not self.supports_ilike():
+            low = operator.lower()
+            if low == "ilike":
+                return "like"
+            if low == "not ilike":
+                return "not like"
+        return operator
+
     def _compile_wheres(self, query: "QueryBuilder") -> Tuple[str, List[Any]]:
         """Compile the WHERE clauses.
 
@@ -477,7 +506,7 @@ class Grammar(ABC):
             else:
                 # Basic where clause
                 column = self._wrap_column(where.column)
-                operator = where.operator
+                operator = self._compile_operator(where.operator)
                 placeholder = self._parameter(where.value)
                 sql_parts.append(f"{prefix}{column} {operator} {placeholder}")
                 bindings.append(where.value)
@@ -529,7 +558,7 @@ class Grammar(ABC):
             prefix = f" {boolean} " if i > 0 else ""
 
             column = self._wrap_column(having.column)
-            operator = having.operator
+            operator = self._compile_operator(having.operator)
             placeholder = self._parameter(having.value)
             sql_parts.append(f"{prefix}{column} {operator} {placeholder}")
             bindings.append(having.value)
@@ -785,6 +814,7 @@ class Grammar(ABC):
         columns_sql = self._compile_columns_create(blueprint)
 
         sql = f"CREATE TABLE {self._wrap_table(blueprint.table)} ({columns_sql})"
+        sql += self._compile_create_table_options(blueprint)
 
         statements = [sql]
 
@@ -823,7 +853,40 @@ class Grammar(ABC):
         for fk in blueprint.foreign_keys:
             statements.append(self._compile_foreign_key(blueprint.table, fk))
 
+        # Dialect-specific trailing statements (e.g. PostgreSQL COMMENT ON TABLE)
+        statements.extend(self._compile_post_create_statements(blueprint))
+
         return statements
+
+    def _compile_create_table_options(self, blueprint: "Blueprint") -> str:
+        """Compile trailing table options appended to ``CREATE TABLE (...)``.
+
+        Base implementation emits nothing (correct for SQLite, which has no
+        such options). MySQL overrides this to emit ``ENGINE`` / ``CHARSET`` /
+        ``COLLATE`` / ``COMMENT``.
+
+        Args:
+            blueprint: Table blueprint.
+
+        Returns:
+            A string to append to the CREATE TABLE statement (``""`` for none).
+        """
+        return ""
+
+    def _compile_post_create_statements(self, blueprint: "Blueprint") -> List[str]:
+        """Compile extra statements emitted after ``CREATE TABLE``.
+
+        Base implementation emits none. PostgreSQL overrides this to emit a
+        ``COMMENT ON TABLE`` statement when a table comment is set (it has no
+        inline ``COMMENT=`` table option like MySQL).
+
+        Args:
+            blueprint: Table blueprint.
+
+        Returns:
+            List of additional SQL statements.
+        """
+        return []
 
     def compile_alter_table(self, blueprint: "Blueprint") -> List[str]:
         """Compile ALTER TABLE statements.

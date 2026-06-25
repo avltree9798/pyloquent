@@ -489,6 +489,10 @@ User.where('age', 18)
 User.where('age', '>=', 18)
 User.where('name', 'like', 'Ali%')
 
+# Case-insensitive match — portable: native ILIKE on PostgreSQL, automatically
+# translated to LIKE (case-insensitive by default) on MySQL and SQLite.
+User.where('name', 'ilike', '%ali%')
+
 # Multiple ANDs
 User.where('age', '>=', 18).where('active', True)
 

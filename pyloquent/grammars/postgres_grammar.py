@@ -262,6 +262,26 @@ class PostgresGrammar(Grammar):
             return "TRUE" if value else "FALSE"
         return super()._compile_default_value(value)
 
+    def _compile_post_create_statements(self, blueprint) -> List[str]:  # noqa: ANN001
+        """PostgreSQL stores a table comment via a separate statement.
+
+        Unlike MySQL's inline ``COMMENT=`` table option, PostgreSQL uses
+        ``COMMENT ON TABLE ... IS '...'``. Charset/collation are not table-level
+        concepts in PostgreSQL, so they are ignored.
+
+        Args:
+            blueprint: Table blueprint.
+
+        Returns:
+            ``[COMMENT ON TABLE ...]`` when a comment is set, else ``[]``.
+        """
+        if blueprint._comment is not None:
+            return [
+                f"COMMENT ON TABLE {self._wrap_table(blueprint.table)} "
+                f"IS {self._quote_string(blueprint._comment)}"
+            ]
+        return []
+
     def _compile_unsigned(self, column) -> str:  # noqa: ANN001
         """PostgreSQL has no unsigned integer types.
 
@@ -304,6 +324,20 @@ class PostgresGrammar(Grammar):
             return mapped
         if column.type == "date_time":
             return f"TIMESTAMP({column.precision})" if column.precision else "TIMESTAMP"
+        if column.type in ("date_time_tz", "timestamp_tz"):
+            # The base maps these to a plain TIMESTAMP (not timezone-aware).
+            # PostgreSQL has a real ``WITH TIME ZONE`` type — use it.
+            return (
+                f"TIMESTAMP({column.precision}) WITH TIME ZONE"
+                if column.precision
+                else "TIMESTAMP WITH TIME ZONE"
+            )
+        if column.type == "time_tz":
+            return (
+                f"TIME({column.precision}) WITH TIME ZONE"
+                if column.precision
+                else "TIME WITH TIME ZONE"
+            )
         if column.type == "enum":
             # No inline ENUM on PostgreSQL — emulate with VARCHAR + CHECK.
             return self._compile_enum_as_check(column)
@@ -322,12 +356,25 @@ class PostgresGrammar(Grammar):
 
         Emits one statement each for the type change, the nullability change,
         and (when set) the default — PostgreSQL has no single MODIFY COLUMN.
+
+        ``enum`` is special-cased: a ``CHECK`` cannot appear inside
+        ``ALTER COLUMN ... TYPE``, so the type is changed to a plain ``VARCHAR``
+        (with a ``USING`` cast) and the allowed-values constraint is added as a
+        separate ``ADD CONSTRAINT ... CHECK`` statement.
         """
         wrapped = self._wrap_table(column_table)
         name = self._wrap_column(column.name)
-        type_sql = self._compile_column_type(column)
 
-        statements = [f"ALTER TABLE {wrapped} ALTER COLUMN {name} TYPE {type_sql}"]
+        is_enum = column.type == "enum"
+        type_sql = "VARCHAR(255)" if is_enum else self._compile_column_type(column)
+
+        if is_enum:
+            statements = [
+                f"ALTER TABLE {wrapped} ALTER COLUMN {name} TYPE {type_sql} "
+                f"USING {name}::{type_sql}"
+            ]
+        else:
+            statements = [f"ALTER TABLE {wrapped} ALTER COLUMN {name} TYPE {type_sql}"]
 
         if column.nullable:
             statements.append(f"ALTER TABLE {wrapped} ALTER COLUMN {name} DROP NOT NULL")
@@ -338,6 +385,14 @@ class PostgresGrammar(Grammar):
             statements.append(
                 f"ALTER TABLE {wrapped} ALTER COLUMN {name} "
                 f"SET DEFAULT {self._compile_default_value(column.default)}"
+            )
+
+        if is_enum:
+            allowed = ", ".join(self._quote_string(v) for v in (column.allowed or []))
+            constraint = self._wrap_value(f"{column_table}_{column.name}_check")
+            statements.append(
+                f"ALTER TABLE {wrapped} ADD CONSTRAINT {constraint} "
+                f"CHECK ({name} IN ({allowed}))"
             )
 
         return statements
