@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.15] - 2026-06-17
+
+### Fixed
+
+- **`enum` / `set` columns produced invalid DDL on PostgreSQL and SQLite** — the base map emitted MySQL-style inline `ENUM('a','b')` / `SET('a','b')`, which only MySQL supports. PostgreSQL rejects them (`type "enum" does not exist`) and SQLite raises a syntax error (its type-name grammar allows only numeric arguments); SQLite had silently *appeared* to work elsewhere via type affinity, but enum/set genuinely failed there too. Both `PostgresGrammar` and `SQLiteGrammar` now render:
+  - `enum` → `VARCHAR(255) CHECK ("col" IN ('a', 'b'))` (a portable, constraint-preserving form — the strategy Laravel uses for these drivers)
+  - `set` → `TEXT` (PostgreSQL/SQLite have no SET type; the membership constraint is a MySQL-only guarantee)
+  MySQL keeps native `ENUM(...)` / `SET(...)`. Allowed values are now quoted with a proper SQL string literal helper (`_quote_string`, `''`-escaped) instead of Python `repr()`, which could emit a double-quoted *identifier* for values containing an apostrophe. Coverage in `tests/unit/test_grammar_schema.py` (SQLite) and `tests/unit/test_mysql_postgres_grammar.py` (PostgreSQL CHECK + MySQL native guard).
+
+### Notes
+
+- Completes the cross-dialect column-type work begun in 0.3.14 (the remaining `enum`/`set` gap that release called out).
+- Limitation: changing a column *to* an enum via `.change()` on PostgreSQL is not supported (a `CHECK` cannot be added inside `ALTER COLUMN ... TYPE`); use `schema.statement()` for that. `CREATE TABLE` — the common path — is fully fixed.
+- Test count: **1157 passing** (+6 from 0.3.14); 100% coverage maintained.
+
 ## [0.3.14] - 2026-06-17
 
 ### Fixed

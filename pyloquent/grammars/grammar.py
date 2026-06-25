@@ -1133,6 +1133,39 @@ class Grammar(ABC):
             parts.append("PRIMARY KEY")
         return " ".join(parts)
 
+    def _quote_string(self, value: Any) -> str:
+        """Quote a value as a SQL string literal.
+
+        Uses single quotes with ``'`` doubled for escaping — valid across
+        PostgreSQL, MySQL and SQLite. Preferable to ``repr()``, which may emit
+        double quotes (a SQL *identifier*, not a string) for values containing
+        an apostrophe.
+
+        Args:
+            value: Value to quote.
+
+        Returns:
+            Single-quoted SQL string literal.
+        """
+        return "'" + str(value).replace("'", "''") + "'"
+
+    def _compile_enum_as_check(self, column: "Column") -> str:
+        """Render an enum as a portable ``VARCHAR`` + ``CHECK`` constraint.
+
+        PostgreSQL and SQLite have no inline ``ENUM`` column type — the
+        MySQL-style ``ENUM('a','b')`` emitted by the base map is a syntax error
+        on both. Model the column instead as a string constrained to the
+        allowed values (the same strategy Laravel uses for those drivers).
+
+        Args:
+            column: Column definition (uses ``name`` and ``allowed``).
+
+        Returns:
+            ``VARCHAR(255) CHECK ("col" IN ('a', 'b'))`` SQL.
+        """
+        allowed = ", ".join(self._quote_string(v) for v in (column.allowed or []))
+        return f"VARCHAR(255) CHECK ({self._wrap_column(column.name)} IN ({allowed}))"
+
     def _compile_column_type(self, column: "Column") -> str:
         """Compile column type.
 
@@ -1174,8 +1207,8 @@ class Grammar(ABC):
             "ip_address": "VARCHAR(45)",
             "mac_address": "VARCHAR(17)",
             "boolean": "BOOLEAN",
-            "enum": f"ENUM({', '.join(repr(v) for v in column.allowed)})",
-            "set": f"SET({', '.join(repr(v) for v in column.allowed)})",
+            "enum": f"ENUM({', '.join(self._quote_string(v) for v in column.allowed)})",
+            "set": f"SET({', '.join(self._quote_string(v) for v in column.allowed)})",
             "vector": f"VECTOR({column.length})",
         }
 

@@ -141,12 +141,32 @@ def test_column_type_uuid():
 
 
 def test_column_type_enum():
+    # SQLite has no native ENUM — it must become a CHECK-constrained VARCHAR
+    # (the raw MySQL-style ENUM('a','b') is a syntax error in SQLite).
     g = grammar()
     col = _col("x", "enum")
     col.allowed = ["a", "b"]
     result = g._compile_column_type(col)
-    assert "ENUM" in result
-    assert "'a'" in result
+    assert "ENUM" not in result
+    assert "CHECK" in result
+    assert '"x" IN' in result
+    assert "'a'" in result and "'b'" in result
+
+
+def test_column_type_set_is_text():
+    # SQLite has no SET type either.
+    g = grammar()
+    col = _col("perms", "set")
+    col.allowed = ["r", "w"]
+    assert g._compile_column_type(col) == "TEXT"
+
+
+def test_enum_value_apostrophe_is_escaped():
+    g = grammar()
+    col = _col("x", "enum")
+    col.allowed = ["it's"]
+    # Proper SQL escaping (doubled quote), never a repr double-quote.
+    assert "'it''s'" in g._compile_column_type(col)
 
 
 def test_column_type_datetime_with_precision():

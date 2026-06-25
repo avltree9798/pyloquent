@@ -57,6 +57,21 @@ class SQLiteGrammar(Grammar):
         """SQLite does not support row locking — return empty string."""
         return ""
 
+    def _compile_column_type(self, column) -> str:  # noqa: ANN001
+        """SQLite has no native ``ENUM`` / ``SET`` type.
+
+        The MySQL-style ``ENUM('a','b')`` / ``SET('a','b')`` the base map emits
+        is a syntax error in SQLite (its type-name grammar only allows numeric
+        arguments). Model ``enum`` as a ``VARCHAR`` + ``CHECK`` constraint and
+        ``set`` as ``TEXT``. Every other type passes through to the base map —
+        SQLite's type affinity accepts the rest (e.g. ``LONGTEXT``) verbatim.
+        """
+        if column.type == "enum":
+            return self._compile_enum_as_check(column)
+        if column.type == "set":
+            return "TEXT"
+        return super()._compile_column_type(column)
+
     def _compile_auto_increment_column(self, column) -> str:  # noqa: ANN001
         """SQLite's only valid auto-increment form is:
 

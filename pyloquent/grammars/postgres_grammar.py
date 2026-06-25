@@ -294,6 +294,13 @@ class PostgresGrammar(Grammar):
             return mapped
         if column.type == "date_time":
             return f"TIMESTAMP({column.precision})" if column.precision else "TIMESTAMP"
+        if column.type == "enum":
+            # No inline ENUM on PostgreSQL — emulate with VARCHAR + CHECK.
+            return self._compile_enum_as_check(column)
+        if column.type == "set":
+            # PostgreSQL has no SET type; store as TEXT (membership is not
+            # enforced — that is a MySQL-only guarantee).
+            return "TEXT"
         return super()._compile_column_type(column)
 
     # ========================================================================

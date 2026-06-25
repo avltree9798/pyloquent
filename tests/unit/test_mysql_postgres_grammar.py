@@ -85,6 +85,14 @@ class TestMySQLGrammar:
         g = MySQLGrammar()
         assert g._compile_column_type(Column(name="c", type="long_text")) == "LONGTEXT"
 
+    def test_enum_and_set_stay_native(self):
+        # MySQL has native ENUM/SET — they must not be rewritten to CHECK/TEXT.
+        g = MySQLGrammar()
+        enum_col = Column(name="status", type="enum", allowed=["a", "b"])
+        set_col = Column(name="perms", type="set", allowed=["r", "w"])
+        assert g._compile_column_type(enum_col) == "ENUM('a', 'b')"
+        assert g._compile_column_type(set_col) == "SET('r', 'w')"
+
 
 # ===========================================================================
 # PostgresGrammar
@@ -224,3 +232,26 @@ class TestPostgresGrammar:
         statements = g._compile_change_column("docs", col)
         assert any("TYPE TEXT" in s for s in statements)
         assert not any("LONGTEXT" in s for s in statements)
+
+    # -- enum / set: PostgreSQL has no inline ENUM and no SET at all.
+
+    def test_enum_becomes_check_constraint(self):
+        g = PostgresGrammar()
+        col = Column(name="status", type="enum", allowed=["active", "inactive"])
+        result = g._compile_column_type(col)
+        assert "ENUM" not in result
+        assert 'CHECK ("status" IN (' in result
+        assert "'active'" in result and "'inactive'" in result
+
+    def test_set_becomes_text(self):
+        g = PostgresGrammar()
+        col = Column(name="perms", type="set", allowed=["r", "w"])
+        assert g._compile_column_type(col) == "TEXT"
+
+    def test_enum_in_create_table_has_no_enum_keyword(self):
+        g = PostgresGrammar()
+        bp = Blueprint("accounts")
+        bp.enum("status", ["active", "inactive"])
+        sql = g.compile_create_table(bp)[0]
+        assert "ENUM" not in sql
+        assert "CHECK" in sql

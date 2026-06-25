@@ -1148,6 +1148,13 @@ table.json('metadata')
 
 # Enums
 table.enum('status', ['pending', 'active', 'inactive'])
+# MySQL    -> ENUM('pending', 'active', 'inactive')
+# Postgres -> VARCHAR(255) CHECK ("status" IN ('pending', 'active', 'inactive'))
+# SQLite   -> VARCHAR(255) CHECK ("status" IN ('pending', 'active', 'inactive'))
+
+# Sets (native on MySQL; stored as TEXT on PostgreSQL/SQLite, where the
+# membership constraint is not enforced)
+table.set_('roles', ['admin', 'editor', 'viewer'])
 
 # Modifiers
 table.string('email').unique()
