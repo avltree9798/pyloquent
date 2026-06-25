@@ -79,6 +79,12 @@ class TestMySQLGrammar:
         assert g._compile_default_value(False) == "0"
         assert g._compile_default_value(True) == "1"
 
+    def test_long_text_stays_longtext(self):
+        # LONGTEXT is a valid MySQL type and must not be remapped to TEXT
+        # (regression guard so the PostgreSQL type fix does not leak into MySQL).
+        g = MySQLGrammar()
+        assert g._compile_column_type(Column(name="c", type="long_text")) == "LONGTEXT"
+
 
 # ===========================================================================
 # PostgresGrammar
@@ -175,3 +181,46 @@ class TestPostgresGrammar:
         col = Column(name="is_active", type="boolean", default=False, nullable=False)
         statements = g._compile_change_column("things", col)
         assert any("SET DEFAULT FALSE" in s for s in statements)
+
+    # -- MySQL-flavoured types that PostgreSQL rejects must be remapped.
+    #    (SQLite silently accepted e.g. LONGTEXT via type affinity.)
+
+    def test_mysql_only_types_remapped_to_postgres(self):
+        g = PostgresGrammar()
+        cases = {
+            "long_text": "TEXT",
+            "medium_text": "TEXT",
+            "tiny_integer": "SMALLINT",
+            "medium_integer": "INTEGER",
+            "double": "DOUBLE PRECISION",
+            "binary": "BYTEA",
+            "year": "INTEGER",
+            "date_time": "TIMESTAMP",
+        }
+        for col_type, expected in cases.items():
+            assert g._compile_column_type(Column(name="c", type=col_type)) == expected
+
+    def test_date_time_keeps_precision(self):
+        g = PostgresGrammar()
+        assert g._compile_column_type(Column(name="c", type="date_time", precision=3)) == "TIMESTAMP(3)"
+
+    def test_valid_types_unchanged(self):
+        g = PostgresGrammar()
+        assert g._compile_column_type(Column(name="c", type="text")) == "TEXT"
+        assert g._compile_column_type(Column(name="c", type="string")) == "VARCHAR(255)"
+        assert g._compile_column_type(Column(name="c", type="boolean")) == "BOOLEAN"
+
+    def test_long_text_in_create_table_is_text(self):
+        g = PostgresGrammar()
+        bp = Blueprint("docs")
+        bp.long_text("body")
+        sql = g.compile_create_table(bp)[0]
+        assert "TEXT" in sql
+        assert "LONGTEXT" not in sql
+
+    def test_long_text_in_change_column_is_text(self):
+        g = PostgresGrammar()
+        col = Column(name="body", type="long_text", nullable=True)
+        statements = g._compile_change_column("docs", col)
+        assert any("TYPE TEXT" in s for s in statements)
+        assert not any("LONGTEXT" in s for s in statements)

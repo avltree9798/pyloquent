@@ -262,6 +262,40 @@ class PostgresGrammar(Grammar):
             return "TRUE" if value else "FALSE"
         return super()._compile_default_value(value)
 
+    def _compile_column_type(self, column) -> str:  # noqa: ANN001
+        """Map MySQL-flavoured Blueprint types to PostgreSQL equivalents.
+
+        The base type map is MySQL-oriented, and several of its type names are
+        invalid on PostgreSQL — ``LONGTEXT`` / ``MEDIUMTEXT`` / ``TINYINT`` /
+        ``MEDIUMINT`` / ``DOUBLE`` / ``DATETIME`` / ``YEAR`` / ``BLOB`` all fail
+        with ``type "..." does not exist`` (SQLite accepts them via type
+        affinity, which is why the mismatch went unnoticed there). Remap those
+        to their PostgreSQL counterparts; every other type defers to the base
+        implementation so valid types (``TEXT``, ``VARCHAR``, ``JSONB``, …) are
+        untouched.
+
+        Args:
+            column: Column definition.
+
+        Returns:
+            PostgreSQL column type SQL.
+        """
+        overrides = {
+            "tiny_integer": "SMALLINT",
+            "medium_integer": "INTEGER",
+            "double": "DOUBLE PRECISION",
+            "medium_text": "TEXT",
+            "long_text": "TEXT",
+            "binary": "BYTEA",
+            "year": "INTEGER",
+        }
+        mapped = overrides.get(column.type)
+        if mapped is not None:
+            return mapped
+        if column.type == "date_time":
+            return f"TIMESTAMP({column.precision})" if column.precision else "TIMESTAMP"
+        return super()._compile_column_type(column)
+
     # ========================================================================
     # Schema Alteration
     # ========================================================================

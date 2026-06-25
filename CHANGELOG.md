@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.14] - 2026-06-17
+
+### Fixed
+
+- **MySQL-only column types produced invalid DDL on PostgreSQL** — the base `_compile_column_type` map is MySQL-flavoured and `PostgresGrammar` inherited it wholesale, so several Blueprint types emitted type names PostgreSQL rejects with `type "..." does not exist`. The trigger was `table.long_text(...)` → `LONGTEXT` (SQLite silently accepted it via type affinity, masking the mismatch). `PostgresGrammar` now overrides `_compile_column_type` to remap the offenders to their PostgreSQL equivalents, applying to both `CREATE TABLE` and `ALTER TABLE ... TYPE` (`.change()`):
+  - `long_text` / `medium_text` → `TEXT`
+  - `tiny_integer` → `SMALLINT`, `medium_integer` → `INTEGER`
+  - `double` → `DOUBLE PRECISION`
+  - `binary` → `BYTEA`
+  - `date_time` → `TIMESTAMP` (precision preserved)
+  - `year` → `INTEGER`
+  Valid types (`text`, `string`, `json`/`jsonb`, `uuid`, `boolean`, `timestamp`, …) are untouched, and SQLite/MySQL output is unchanged. Coverage in `tests/unit/test_mysql_postgres_grammar.py` (incl. a MySQL guard that `long_text` stays `LONGTEXT`).
+
+### Notes
+
+- Surfaced by a downstream migration using `table.long_text(...)` against PostgreSQL.
+- Still **not** modelled for PostgreSQL: `enum` / `set` emit MySQL-style inline definitions (`ENUM(...)` / `SET(...)`) that PostgreSQL cannot create inline (they require a `CREATE TYPE` or `VARCHAR + CHECK`). Use `schema.statement()` (0.3.13) for those until a dedicated API lands.
+- Test count: **1151 passing** (+6 from 0.3.13); 100% coverage maintained.
+
 ## [0.3.13] - 2026-06-17
 
 ### Added
