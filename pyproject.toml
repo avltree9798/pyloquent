@@ -1,6 +1,6 @@
 [project]
 name = "pyloquent"
-version = "0.3.15"
+version = "0.3.16"
 description = "Eloquent-inspired ORM for Python with Pydantic and FastAPI support"
 readme = "README.md"
 license = {text = "MIT"}

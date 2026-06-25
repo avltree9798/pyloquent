@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.16] - 2026-06-17
+
+### Fixed
+
+Two more cross-dialect DDL bugs found during a grammar audit (same root cause class — the MySQL-flavoured base grammar leaking into PostgreSQL):
+
+- **`UNSIGNED` modifier produced invalid DDL on PostgreSQL** — `_compile_column` appended `UNSIGNED` for unsigned columns, which PostgreSQL has no concept of (`BIGINT UNSIGNED` is a syntax error). This commonly fired via `unsigned_big_integer(...)` foreign-key columns. The modifier is now produced by an overridable `_compile_unsigned()` hook, and `PostgresGrammar` drops it. MySQL keeps `UNSIGNED`; SQLite (which tolerates it via type affinity) is unchanged.
+- **String column defaults were rendered with `repr()`** — a default containing an apostrophe (e.g. `default("O'Brien")`) produced `"O'Brien"`, a double-quoted *identifier* in standard SQL/PostgreSQL → error (it only worked on MySQL's default quoting mode). `_compile_default_value` now uses the `_quote_string` helper (single-quoted, `''`-escaped) for string defaults across all grammars. Normal defaults like `'active'` are unchanged.
+
+Coverage in `tests/unit/test_grammar_schema.py` and `tests/unit/test_mysql_postgres_grammar.py` (PostgreSQL fix + MySQL guards).
+
+### Notes
+
+- Remaining audit observations (not yet addressed): `enum` via `.change()` on PostgreSQL (see 0.3.15), and the `ilike` operator passed to MySQL/SQLite is emitted verbatim (those engines reject it) — use `like` there.
+- Test count: **1161 passing** (+4 from 0.3.15); 100% coverage maintained.
+
 ## [0.3.15] - 2026-06-17
 
 ### Fixed

@@ -93,6 +93,12 @@ class TestMySQLGrammar:
         assert g._compile_column_type(enum_col) == "ENUM('a', 'b')"
         assert g._compile_column_type(set_col) == "SET('r', 'w')"
 
+    def test_unsigned_modifier_kept(self):
+        # MySQL supports UNSIGNED — must not be stripped by the PostgreSQL fix.
+        g = MySQLGrammar()
+        col = Column(name="user_id", type="big_integer", unsigned=True, nullable=False)
+        assert "UNSIGNED" in g._compile_column(col)
+
 
 # ===========================================================================
 # PostgresGrammar
@@ -255,3 +261,18 @@ class TestPostgresGrammar:
         sql = g.compile_create_table(bp)[0]
         assert "ENUM" not in sql
         assert "CHECK" in sql
+
+    # -- PostgreSQL has no unsigned integer types.
+
+    def test_unsigned_modifier_dropped(self):
+        g = PostgresGrammar()
+        col = Column(name="user_id", type="big_integer", unsigned=True, nullable=False)
+        sql = g._compile_column(col)
+        assert "UNSIGNED" not in sql
+        assert "BIGINT" in sql
+
+    def test_string_default_apostrophe_escaped(self):
+        g = PostgresGrammar()
+        # Must be a single-quoted literal with '' escaping, never a
+        # double-quoted identifier (which PostgreSQL would reject).
+        assert g._compile_default_value("O'Brien") == "'O''Brien'"

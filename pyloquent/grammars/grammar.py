@@ -1093,9 +1093,10 @@ class Grammar(ABC):
         type_sql = self._compile_column_type(column)
         sql_parts.append(type_sql)
 
-        # Unsigned
-        if column.unsigned:
-            sql_parts.append("UNSIGNED")
+        # Unsigned (overridable — PostgreSQL has no unsigned types)
+        unsigned_sql = self._compile_unsigned(column)
+        if unsigned_sql:
+            sql_parts.append(unsigned_sql)
 
         # Nullable
         if not column.nullable:
@@ -1114,6 +1115,22 @@ class Grammar(ABC):
             sql_parts.append("PRIMARY KEY")
 
         return " ".join(sql_parts)
+
+    def _compile_unsigned(self, column: "Column") -> str:
+        """Compile the ``UNSIGNED`` modifier for a column.
+
+        Returns ``"UNSIGNED"`` for unsigned columns by default (MySQL; SQLite
+        tolerates it via type affinity). PostgreSQL has no unsigned integer
+        types and rejects ``INTEGER UNSIGNED``, so its grammar overrides this
+        to a no-op.
+
+        Args:
+            column: Column definition.
+
+        Returns:
+            ``"UNSIGNED"`` or an empty string.
+        """
+        return "UNSIGNED" if column.unsigned else ""
 
     def _compile_auto_increment_column(self, column: "Column") -> str:
         """Compile an auto-incrementing column.
@@ -1230,9 +1247,9 @@ class Grammar(ABC):
         elif isinstance(value, (int, float)):
             return str(value)
         elif isinstance(value, str):
-            return repr(value)
+            return self._quote_string(value)
         else:
-            return repr(str(value))
+            return self._quote_string(str(value))
 
     def _compile_auto_increment(self) -> str:
         """Compile auto increment clause.

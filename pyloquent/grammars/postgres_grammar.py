@@ -262,6 +262,16 @@ class PostgresGrammar(Grammar):
             return "TRUE" if value else "FALSE"
         return super()._compile_default_value(value)
 
+    def _compile_unsigned(self, column) -> str:  # noqa: ANN001
+        """PostgreSQL has no unsigned integer types.
+
+        The base grammar emits ``UNSIGNED`` (valid on MySQL, tolerated by
+        SQLite), but ``INTEGER UNSIGNED`` is a syntax error on PostgreSQL —
+        common via ``unsigned_big_integer()`` foreign-key columns. Drop the
+        modifier entirely.
+        """
+        return ""
+
     def _compile_column_type(self, column) -> str:  # noqa: ANN001
         """Map MySQL-flavoured Blueprint types to PostgreSQL equivalents.
 

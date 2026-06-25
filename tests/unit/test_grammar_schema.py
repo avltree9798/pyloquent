@@ -56,7 +56,14 @@ def test_compile_column_default_string():
     col = _col("status", "string", default="active")
     sql = g._compile_column(col)
     assert "DEFAULT" in sql
-    assert "active" in sql
+    assert "'active'" in sql
+
+
+def test_compile_column_default_string_escapes_apostrophe():
+    # repr() would emit a double-quoted identifier ("O'Brien"); SQL needs a
+    # single-quoted literal with the quote doubled.
+    g = grammar()
+    assert g._compile_default_value("O'Brien") == "'O''Brien'"
 
 
 def test_compile_column_default_none():
