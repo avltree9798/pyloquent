@@ -2006,6 +2006,78 @@ await manager.connect()
 
 ---
 
+## Running in Pyodide / Browser / Cloudflare Python Workers
+
+Pyloquent is published as a **pure-Python wheel** (`pyloquent-x.y.z-py3-none-any.whl`)
+with no compiled extensions, so it installs in any [Pyodide](https://pyodide.org)
+runtime — the browser, [PyScript](https://pyscript.net),
+[JupyterLite](https://jupyterlite.readthedocs.io) and
+[Cloudflare Python Workers](https://developers.cloudflare.com/workers/languages/python/)
+(which run on Pyodide). There is **no separate Pyodide build** — you install the
+same PyPI wheel at runtime.
+
+### Installing with `micropip`
+
+```python
+import micropip
+await micropip.install("pyloquent")
+
+from pyloquent import Model, ConnectionManager
+```
+
+`micropip` resolves the four runtime dependencies as follows:
+
+| Dependency | Source in Pyodide |
+|-----------|-------------------|
+| `pydantic`, `pydantic-core` | **Prebuilt by Pyodide** (pydantic-core is Rust → shipped as a WASM build) |
+| `aiosqlite`, `typing-extensions` | Pure-Python wheels from **PyPI** |
+
+> Importing `pyloquent` never imports the optional drivers (`asyncpg`,
+> `aiomysql`, `httpx`, `redis`, `faker`) — they are loaded lazily only when used —
+> so the import succeeds with just the core dependencies present.
+
+### Driver support under WebAssembly
+
+WASM has **no OS threads and no raw TCP sockets**, which determines what can
+actually execute queries (importing always works):
+
+| Driver | In Pyodide / browser | Why |
+|--------|----------------------|-----|
+| **D1 binding** (`d1_binding`) | ✅ Recommended | Uses the JS `env.DB` object — no threads or sockets |
+| `aiosqlite` (`sqlite`) | ⚠️ Unreliable | Runs SQLite on a background thread; threads are unavailable in the default Pyodide/Workers runtime |
+| `asyncpg` / `aiomysql` | ❌ | Require raw TCP sockets |
+| D1 HTTP (`httpx`) | ⚠️ | Needs a Pyodide-compatible HTTP transport |
+
+### Cloudflare Python Workers (recommended)
+
+Cloudflare Python Workers are Pyodide-based, and the **D1 binding driver** is the
+intended persistence layer there — no threads or sockets involved. See
+[Cloudflare D1 — Native Worker Binding](#cloudflare-d1--native-worker-binding)
+for the full example:
+
+```python
+from workers import WorkerEntrypoint, Response
+from pyloquent import ConnectionManager, Model
+from pyloquent.database.manager import set_manager
+
+class Default(WorkerEntrypoint):
+    async def fetch(self, request):
+        manager = ConnectionManager.from_binding(self.env.DB)   # D1 binding
+        set_manager(manager)
+        users = await User.where('active', True).get()
+        return Response.json(users.to_dict_list())
+```
+
+Declare Pyloquent in the Worker's Python requirements per the
+[Cloudflare packages guide](https://developers.cloudflare.com/workers/languages/python/packages/).
+
+> **In-browser SQLite.** `aiosqlite` does not run in WASM. Persisting locally in
+> the browser needs a `sqlite-wasm` / `sql.js`-backed connection class, which
+> Pyloquent does not ship today — use the D1 binding (Workers) or a remote API
+> for data access.
+
+---
+
 ## License
 
 Pyloquent is open-sourced software licensed under the MIT license.
