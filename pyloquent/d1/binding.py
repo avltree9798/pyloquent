@@ -92,6 +92,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
+from pyloquent.d1._coerce import to_d1_params
 from pyloquent.database.connection import Connection
 from pyloquent.exceptions import QueryException
 from pyloquent.grammars.sqlite_grammar import SQLiteGrammar
@@ -246,6 +247,12 @@ class D1BindingConnection(Connection):
     def _bind(self, stmt: Any, bindings: Optional[List[Any]]) -> Any:
         """Optionally bind parameters to a prepared statement.
 
+        Values are coerced to D1-safe primitives first (e.g. ``datetime`` →
+        ISO string, ``dict`` → JSON). Without this, Pyodide passes a Python
+        ``datetime`` to the JS layer as a ``Date`` and D1 rejects it with
+        ``D1_TYPE_ERROR: Type 'object' not supported``. See
+        :func:`pyloquent.d1._coerce.to_d1_value`.
+
         Args:
             stmt: D1PreparedStatement.
             bindings: List of parameter values, or ``None``.
@@ -254,7 +261,7 @@ class D1BindingConnection(Connection):
             Bound (or unbound) statement.
         """
         if bindings:
-            return stmt.bind(*bindings)
+            return stmt.bind(*to_d1_params(bindings))
         return stmt
 
     # ------------------------------------------------------------------

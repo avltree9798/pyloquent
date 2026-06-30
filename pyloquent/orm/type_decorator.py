@@ -144,7 +144,9 @@ class JSONType(TypeDecorator):
         if isinstance(value, str):
             return value
         import json
-        return json.dumps(value)
+        # default=str so nested datetime/date/Decimal values serialise instead
+        # of raising "Object of type ... is not JSON serializable".
+        return json.dumps(value, default=str)
 
     def process_result_value(self, value: Any, dialect: Optional[str] = None) -> Any:
         """Deserialise from JSON string.

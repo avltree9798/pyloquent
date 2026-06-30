@@ -94,3 +94,20 @@ class TestJsonCastOnSave:
 
         reloaded = await _Widget.find(w.id)
         assert reloaded.settings is None
+
+    async def test_json_cast_serialises_nested_datetime(self, widgets) -> None:
+        """A json-cast dict containing a datetime/date must serialise.
+
+        Regression: ``json.dumps`` without ``default=str`` raised
+        ``Object of type datetime is not JSON serializable`` — hit in the wild
+        by a ``meta`` column holding a ``fetched_at`` timestamp.
+        """
+        from datetime import date, datetime
+
+        w = await _Widget.create(
+            {"name": "x", "settings": {"fetched_at": datetime(2026, 6, 30, 12, 57, 59), "day": date(2026, 6, 30)}}
+        )
+        reloaded = await _Widget.find(w.id)
+        # Stored as ISO-ish strings inside the JSON payload.
+        assert reloaded.settings["fetched_at"] == "2026-06-30 12:57:59"
+        assert reloaded.settings["day"] == "2026-06-30"

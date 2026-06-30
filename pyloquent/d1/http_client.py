@@ -3,6 +3,7 @@
 import json
 from typing import Any, Dict, List, Optional
 
+from pyloquent.d1._coerce import to_d1_params
 from pyloquent.exceptions import QueryException
 
 
@@ -90,7 +91,9 @@ class D1HttpClient:
 
         payload = {
             "sql": sql,
-            "params": params or [],
+            # Coerce to D1-safe JSON primitives (datetime -> ISO string, etc.)
+            # — a raw datetime would otherwise fail json serialisation.
+            "params": to_d1_params(params) or [],
         }
 
         async with httpx.AsyncClient() as client:
@@ -169,11 +172,16 @@ class D1HttpClient:
         url = f"{self._get_query_url()}/batch"
         headers = self._get_headers()
 
+        # Coerce each query's params to D1-safe JSON primitives.
+        payload_queries = [
+            {**q, "params": to_d1_params(q.get("params")) or []} for q in queries
+        ]
+
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 url,
                 headers=headers,
-                json=queries,
+                json=payload_queries,
                 timeout=30.0,
             )
 

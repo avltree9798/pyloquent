@@ -1852,7 +1852,9 @@ class Model(BaseModel, metaclass=ModelMeta):
             import json
 
             if not isinstance(value, str):
-                return json.dumps(value)
+                # default=str so nested datetime/date/Decimal in the payload
+                # serialise (as ISO-ish strings) instead of raising TypeError.
+                return json.dumps(value, default=str)
             return value
         elif cast_type in ["bool", "int", "float", "string"]:
             return value

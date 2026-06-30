@@ -466,3 +466,78 @@ async def test_fetch_all_raises_when_not_connected(mock_db):
     c = D1BindingConnection(mock_db)
     with pytest.raises(QueryException):
         await c.fetch_all("SELECT * FROM users")
+
+
+# ---------------------------------------------------------------------------
+# D1 bind-parameter coercion (regression: datetime -> JS Date -> D1_TYPE_ERROR)
+# ---------------------------------------------------------------------------
+
+import datetime as _dt  # noqa: E402
+import uuid as _uuid  # noqa: E402
+from decimal import Decimal  # noqa: E402
+from enum import Enum  # noqa: E402
+
+from pyloquent.d1._coerce import to_d1_value  # noqa: E402
+
+
+class _Status(str, Enum):
+    ACTIVE = "active"
+
+
+def test_to_d1_value_primitives_pass_through():
+    for v in (None, "x", 1, 1.5, True, False):
+        assert to_d1_value(v) is v
+
+
+def test_to_d1_value_datetime_to_isoformat():
+    assert to_d1_value(_dt.datetime(2026, 6, 30, 12, 57, 59)) == "2026-06-30T12:57:59"
+    assert to_d1_value(_dt.date(2026, 6, 30)) == "2026-06-30"
+    assert to_d1_value(_dt.time(12, 57, 59)) == "12:57:59"
+
+
+def test_to_d1_value_decimal_uuid_enum():
+    assert to_d1_value(Decimal("12.50")) == "12.50"
+    u = _uuid.uuid4()
+    assert to_d1_value(u) == str(u)
+    assert to_d1_value(_Status.ACTIVE) == "active"
+
+
+def test_to_d1_value_dict_and_list_to_json():
+    assert to_d1_value({"a": 1}) == '{"a": 1}'
+    assert to_d1_value([1, 2]) == "[1, 2]"
+    # Nested non-primitives still serialise (default=str).
+    assert "2026-06-30" in to_d1_value({"at": _dt.date(2026, 6, 30)})
+
+
+class _CaptureStmt:
+    def __init__(self):
+        self.bound = None
+
+    def bind(self, *args):
+        self.bound = list(args)
+        return self
+
+    async def run(self):
+        return {"success": True, "meta": {"changes": 1, "last_row_id": 1}}
+
+
+class _CaptureDB:
+    def __init__(self):
+        self.last = None
+
+    def prepare(self, sql):
+        self.last = _CaptureStmt()
+        return self.last
+
+
+@pytest.mark.asyncio
+async def test_execute_coerces_datetime_binding_end_to_end():
+    """A datetime binding must reach stmt.bind() as an ISO string, not a Date."""
+    db = _CaptureDB()
+    conn = D1BindingConnection(db)
+    await conn.connect()
+    await conn.execute(
+        "INSERT INTO sources (created_at, meta) VALUES (?, ?)",
+        [_dt.datetime(2026, 6, 30, 12, 57, 59), {"k": "v"}],
+    )
+    assert db.last.bound == ["2026-06-30T12:57:59", '{"k": "v"}']

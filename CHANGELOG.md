@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.18] - 2026-06-30
+
+### Fixed
+
+Two "serialise non-primitive values for storage" bugs, both hit in production on Cloudflare D1 (Python Workers):
+
+- **D1 rejected `datetime` (and other non-primitive) bind parameters** — the D1 binding driver passed values straight to `stmt.bind(*params)`, so Pyodide converted a Python `datetime` to a JS `Date` and D1 raised `D1_TYPE_ERROR: Type 'object' not supported for value 'Tue Jun 30 2026 …'`. This fired on the auto-managed `created_at` / `updated_at` timestamps of any model. Both D1 drivers now coerce bind parameters to D1-safe primitives via `pyloquent/d1/_coerce.py` (`datetime`/`date`/`time` → ISO string, `Decimal` → str, `UUID` → str, `Enum` → its value, `dict`/`list` → JSON). Applied at the single bind choke point (`D1BindingConnection._bind`) and in the HTTP client (`query` / `batch`). The conversion is **D1-specific** — asyncpg/aiosqlite keep native objects.
+- **`json`-cast columns crashed on nested `datetime`/`Decimal`** — `json.dumps(value)` (in `Model._set_cast_attribute` and `JSONType.process_bind_param`) raised `Object of type datetime is not JSON serializable` when a JSON payload contained a datetime (e.g. a `meta = {"fetched_at": <datetime>}` column). Both now pass `default=str`. Regression coverage in `tests/integration/test_json_cast_save.py` and `tests/unit/test_d1_binding.py`.
+
+### Notes
+
+- D1 (SQLite) has no native JSON storage/bind type — JSON is stored as TEXT and bound as a string — so serialising via the `json` cast is the correct approach; D1 still supports SQLite's `json_extract` / `->` / `->>` for querying it.
+- Reported by a downstream Cloudflare Python Workers app.
+- Test count: **1174 passing** (+6 from 0.3.17); 100% coverage maintained (the `pyloquent/d1/*` layer is exercised by `tests/unit/test_d1_binding.py` but excluded from the coverage gate).
+
 ## [0.3.17] - 2026-06-17
 
 ### Fixed / Added
